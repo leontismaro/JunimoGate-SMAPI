@@ -10,6 +10,8 @@ using StardewModdingAPI.Framework.Exceptions;
 using StardewModdingAPI.Framework.ModLoading.Framework;
 using StardewModdingAPI.Framework.ModLoading.Symbols;
 using StardewModdingAPI.Metadata;
+using StardewModdingAPI.Mobile;
+using StardewModdingAPI.AndroidHost;
 using StardewModdingAPI.Toolkit.Framework.ModData;
 using StardewModdingAPI.Toolkit.Utilities;
 
@@ -158,6 +160,21 @@ internal class AssemblyLoader : IDisposable
                 }
             }
 
+#if SMAPI_FOR_ANDROID
+            if (mod.Warnings != ModWarning.BrokenCodeLoaded)
+            {
+                AndroidModFixManager.Instance.TryRewriteMod(assembly, out bool hasRewriteMod, out var err);
+                if (err != null)
+                {
+                    mod.SetWarning(ModWarning.BrokenCodeLoaded);
+                }
+                else if (hasRewriteMod)
+                {
+                    changed = true;
+                }
+            }
+#endif
+
             // load assembly
             if (changed)
             {
@@ -169,13 +186,15 @@ internal class AssemblyLoader : IDisposable
                 using MemoryStream outSymbolStream = new();
                 assembly.Definition.Write(outAssemblyStream, new WriterParameters { WriteSymbols = true, SymbolStream = outSymbolStream, SymbolWriterProvider = this.SymbolWriterProvider });
                 byte[] bytes = outAssemblyStream.ToArray();
-                lastAssembly = Assembly.Load(bytes, outSymbolStream.ToArray());
+                lastAssembly = AndroidHostServices.AssemblyLoader?.LoadRewritten(assembly.File.FullName, bytes, outSymbolStream.ToArray())
+                    ?? Assembly.Load(bytes, outSymbolStream.ToArray());
             }
             else
             {
                 if (!oneAssembly)
                     this.Monitor.Log($"      Loading assembly '{assembly.File.Name}'...");
-                lastAssembly = Assembly.UnsafeLoadFrom(assembly.File.FullName);
+                lastAssembly = AndroidHostServices.AssemblyLoader?.LoadFromPath(assembly.File.FullName)
+                    ?? Assembly.UnsafeLoadFrom(assembly.File.FullName);
             }
 
             // track loaded assembly for definition resolution

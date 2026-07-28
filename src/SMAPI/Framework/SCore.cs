@@ -37,7 +37,6 @@ using StardewModdingAPI.Framework.Rendering;
 using StardewModdingAPI.Framework.Serialization;
 using StardewModdingAPI.Framework.StateTracking.Snapshots;
 using StardewModdingAPI.Framework.Utilities;
-using StardewModdingAPI.Integrations.GenericModConfigMenu;
 using StardewModdingAPI.Internal;
 using StardewModdingAPI.Toolkit;
 using StardewModdingAPI.Toolkit.Framework.Clients.WebApi;
@@ -56,6 +55,14 @@ using xTile.Display;
 using LanguageCode = StardewValley.LocalizedContentManager.LanguageCode;
 using MiniMonoModHotfix = MonoMod.Utils.MiniMonoModHotfix;
 using PathUtilities = StardewModdingAPI.Toolkit.Utilities.PathUtilities;
+using System.Security.Cryptography;
+using StardewValley.Characters;
+using StardewModdingAPI.Mobile;
+using StardewModdingAPI.AndroidHost;
+using Android.Views;
+using Android.App;
+using HarmonyLib;
+using static Android.Provider.CalendarContract;
 
 namespace StardewModdingAPI.Framework;
 
@@ -82,15 +89,16 @@ internal class SCore : IDisposable
 
     /// <summary>Simplifies access to private game code.</summary>
     private readonly Reflector Reflection = new();
+    public Reflector GetReflector => this.Reflection;
 
     /// <summary>Encapsulates access to SMAPI core translations.</summary>
     private readonly Translator Translator = new();
 
+    /// <summary>The SMAPI configuration settings.</summary>
+    private readonly SConfig Settings;
+
     /// <summary>The mod toolkit used for generic mod interactions.</summary>
     private readonly ModToolkit Toolkit = new();
-
-    /// <summary>The SMAPI configuration settings.</summary>
-    private SConfig Settings;
 
     /****
     ** Higher-level components
@@ -110,18 +118,20 @@ internal class SCore : IDisposable
     /// <summary>Tracks the installed mods.</summary>
     /// <remarks>This is initialized after the game starts.</remarks>
     private readonly ModRegistry ModRegistry = new();
+#if SMAPI_FOR_ANDROID
+    public ModRegistry GetModRegistry() => this.ModRegistry;
+#endif
 
     /// <summary>Manages SMAPI events for mods.</summary>
     private readonly EventManager EventManager;
+
+
 
     /****
     ** State
     ****/
     /// <summary>The path to search for mods.</summary>
     private string ModsPath => Constants.ModsPath;
-
-    /// <summary>The override to apply for <see cref="SConfig.DeveloperMode"/>, or <c>null</c> to use the value from the settings file.</summary>
-    private readonly bool? OverrideDeveloperMode;
 
     /// <summary>Whether the game is currently running.</summary>
     private bool IsGameRunning;
@@ -175,14 +185,15 @@ internal class SCore : IDisposable
     internal static uint ProcessTicksElapsed { get; private set; }
 
 
+
     /*********
     ** Public methods
     *********/
     /// <summary>Construct an instance.</summary>
     /// <param name="modsPath">The path to search for mods.</param>
     /// <param name="writeToConsole">Whether to output log messages to the console.</param>
-    /// <param name="overrideDeveloperMode">The override to apply for <see cref="SConfig.DeveloperMode"/>, or <c>null</c> to use the value from the settings file.</param>
-    public SCore(string modsPath, bool writeToConsole, bool? overrideDeveloperMode)
+    /// <param name="developerMode">Whether to enable development features, or <c>null</c> to use the value from the settings file.</param>
+    public SCore(string modsPath, bool writeToConsole, bool? developerMode)
     {
         SCore.Instance = this;
 
@@ -196,11 +207,20 @@ internal class SCore : IDisposable
         string logPath = this.GetLogPath();
 
         // init settings
-        this.OverrideDeveloperMode = overrideDeveloperMode;
-        this.ReloadSettings();
+        {
+            var deserializerSettings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            this.Settings = JsonConvert.DeserializeObject<SConfig>(File.ReadAllText(Constants.ApiConfigPath)) ?? throw new InvalidOperationException("The 'smapi-internal/config.json' file is missing or invalid. You can reinstall SMAPI to fix this.");
+            if (File.Exists(Constants.ApiUserConfigPath))
+                JsonConvert.PopulateObject(File.ReadAllText(Constants.ApiUserConfigPath), this.Settings, deserializerSettings);
+            if (File.Exists(Constants.ApiModGroupConfigPath))
+                JsonConvert.PopulateObject(File.ReadAllText(Constants.ApiModGroupConfigPath), this.Settings, deserializerSettings);
+            if (developerMode.HasValue)
+                this.Settings.OverrideDeveloperMode(developerMode.Value);
+        }
 
         // init basics
-        this.LogManager = new LogManager(logPath: logPath, colorSchemeId: this.Settings.ConsoleColorScheme, colorConfig: this.Settings.ConsoleColorSchemes, writeToConsole: writeToConsole, verboseLogging: this.Settings.VerboseLogging, isDeveloperMode: this.Settings.DeveloperMode, getScreenIdForLog: this.GetScreenIdForLog);
+        this.LogManager = new LogManager(logPath: logPath, colorConfig: this.Settings.ConsoleColors, writeToConsole: writeToConsole, verboseLogging: this.Settings.VerboseLogging, isDeveloperMode: this.Settings.DeveloperMode, getScreenIdForLog: this.GetScreenIdForLog);
         this.CommandManager = new CommandManager(this.Monitor);
         this.EventManager = new EventManager(this.ModRegistry);
         SCore.DeprecationManager = new DeprecationManager(this.Monitor, this.ModRegistry);
@@ -217,11 +237,11 @@ internal class SCore : IDisposable
             this.LogManager.PressAnyKeyToExit();
         }
 #else
-            if (Constants.Platform == Platform.Windows)
-            {
-                this.Monitor.Log($"Oops! You're running {Constants.Platform}, but this version of SMAPI is for Windows. Please reinstall SMAPI to fix this.", LogLevel.Error);
-                this.LogManager.PressAnyKeyToExit();
-            }
+        if (Constants.Platform == Platform.Windows)
+        {
+            this.Monitor.Log($"Oops! You're running {Constants.Platform}, but this version of SMAPI is for Windows. Please reinstall SMAPI to fix this.", LogLevel.Error);
+            this.LogManager.PressAnyKeyToExit();
+        }
 #endif
     }
 
@@ -254,7 +274,11 @@ internal class SCore : IDisposable
 
             // check content integrity
             // we start this before initializing the game, in case content issues crash its initialization
+#if SMAPI_FOR_ANDROID
+            //no need to check
+#else
             Task.Run(this.LogContentIntegrityIssues);
+#endif
 
             // override game
             this.Multiplayer = new SMultiplayer(this.Monitor, this.EventManager, this.Toolkit.JsonHelper, this.ModRegistry, this.OnModMessageReceived, this.Settings.LogNetworkTraffic);
@@ -276,12 +300,20 @@ internal class SCore : IDisposable
 
                 onGameContentLoaded: this.OnInstanceContentLoaded,
                 onLoadStageChanged: this.OnLoadStageChanged,
+#if SMAPI_FOR_ANDROID
+                onGameUpdating: this.OnGameUpdateForModLoader,
+#else
+
                 onGameUpdating: this.OnGameUpdating,
+#endif
                 onPlayerInstanceUpdating: this.OnPlayerInstanceUpdating,
                 onPlayerInstanceRendered: this.OnRendered,
                 onGameExiting: this.OnGameExiting
             );
             GameRunner.instance = this.Game;
+#if SMAPI_FOR_ANDROID
+            SGameRunner.RegisterOnDraw(this.OnAndroidRendered);
+#endif
 
             // fix Harmony for mods
             if (this.Settings.FixHarmony)
@@ -298,7 +330,9 @@ internal class SCore : IDisposable
         }
 
         // log basic info
+#if !SMAPI_FOR_ANDROID
         this.LogManager.HandleMarkerFiles();
+#endif
         this.LogManager.LogSettingsHeader(this.Settings);
 
         // set window titles
@@ -306,6 +340,26 @@ internal class SCore : IDisposable
 
         // start game
         this.Monitor.Log("Waiting for game to launch...", LogLevel.Debug);
+
+#if SMAPI_FOR_ANDROID
+        try
+        {
+            var gameView = GameRunner.instance.Services.GetService<View>();
+            AndroidHostServices.Options?.AttachGameView(gameView);
+
+            Console.WriteLine("try Game.Run()");
+            this.IsGameRunning = true;
+            StardewValley.Program.releaseBuild = true; // game's debug logic interferes with SMAPI opening the game window
+            this.Game.Run();
+            Console.WriteLine("done Game.Run()");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("error try game.run(): " + ex);
+            AndroidHostServices.Options?.ReportFailure(new SmapiFailure("game_run_failed", ex.Message, ex));
+            throw;
+        }
+#else
         try
         {
             this.IsGameRunning = true;
@@ -330,6 +384,7 @@ internal class SCore : IDisposable
             this.LogManager.PressAnyKeyToExit();
             this.Dispose(isError: true);
         }
+#endif
     }
 
     /// <summary>Get the core logger and monitor on behalf of the game.</summary>
@@ -338,6 +393,10 @@ internal class SCore : IDisposable
     {
         return this.LogManager.MonitorForGame;
     }
+
+#if SMAPI_FOR_ANDROID
+    public IMonitor SMAPIMonitor => this.LogManager.Monitor;
+#endif
 
     /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
     [SuppressMessage("ReSharper", "ConditionalAccessQualifierIsNonNullableAccordingToAPIContract", Justification = "May be disposed before SMAPI is fully initialized.")]
@@ -375,6 +434,9 @@ internal class SCore : IDisposable
         if (this.ExitState == ExitState.None || isError)
             this.ExitState = isError ? ExitState.Crash : ExitState.GameExit;
         this.ContentCore?.Dispose();
+#if SMAPI_FOR_ANDROID
+        SGameRunner.UnregisterOnDraw(this.OnAndroidRendered);
+#endif
         this.Game?.Dispose();
         this.LogManager.Dispose(); // dispose last to allow for any last-second log messages
 
@@ -396,6 +458,7 @@ internal class SCore : IDisposable
         // This helps the OS decide whether to keep the window open (e.g. Windows may keep it open on error).
         Environment.Exit(this.ExitState == ExitState.Crash ? 1 : 0);
     }
+
 
 
     /*********
@@ -438,25 +501,12 @@ internal class SCore : IDisposable
             Constants.ApiBlacklistActualPath = Constants.ApiBlacklistPath;
         }
 
-        // check for malicious loose files
-        this.Monitor.Log("Scanning for malicious files...");
-        {
-            bool foundMaliciousFiles = false;
-
-            foreach ((string filePath, LooseFileBlacklistEntryModel match) in modBlacklist.CheckLooseFiles(this.ModsPath))
-            {
-                foundMaliciousFiles = true;
-
-                this.Monitor.LogFatal("Malicious mod file detected.");
-                this.Monitor.Log($"File path: '{filePath}'", LogLevel.Error);
-                this.Monitor.Newline();
-                this.Monitor.Log(match.Message ?? "This file has been flagged as malicious. You should immediately delete the mod containing the file, and perform a full anti-malware scan of your computer to be safe.", LogLevel.Error);
-            }
-
-            if (foundMaliciousFiles)
-                this.LogManager.PressAnyKeyToExit();
-        }
-
+#if SMAPI_FOR_ANDROID
+        Console.WriteLine("start loading mods in background thread");
+        AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.Starting;
+        AndroidModLoaderManager.StartLoggerToScreen();
+        Task.Run(() =>
+#endif
         // load mods
         {
             this.Monitor.Log("Loading mod metadata...", LogLevel.Debug);
@@ -510,16 +560,32 @@ internal class SCore : IDisposable
             mods = resolver.ProcessDependencies(mods, modDatabase).ToArray();
             this.LoadMods(mods, this.Toolkit.JsonHelper, this.ContentCore, modDatabase);
 
+#if !SMAPI_FOR_ANDROID
             // check for software likely to cause issues
             this.CheckForSoftwareConflicts();
 
             // check for updates
             _ = this.CheckForUpdatesAsync(mods); // ignore task since the main thread doesn't need to wait for it
+#else
 
-            // register config menu with Generic Mod Config Menu
-            if (this.Settings.EnableConfigMenu)
-                new GenericModConfigMenuIntegration(this.Monitor, this.Translator, () => this.Settings, this.ReloadSettings).Register(this.ModRegistry);
+            AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.LoadedAndNeedToConfirm;
+#endif
         }
+
+#if SMAPI_FOR_ANDROID
+        // close task LoadMods
+        ).ContinueWith(
+            task =>
+            {
+                Exception exception = task.Exception?.GetBaseException() ?? new InvalidOperationException("The Android mod loader failed without an exception.");
+                this.Monitor.Log($"Android mod loading failed before completion.\n{exception.GetLogSummary()}", LogLevel.Error);
+                AndroidHostServices.Options?.ReportFailure(new SmapiFailure("mod_loading_failed", exception.Message, exception));
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default
+        );
+#endif
 
         // update window titles
         this.UpdateWindowTitles();
@@ -529,6 +595,7 @@ internal class SCore : IDisposable
     private void OnGameInitialized()
     {
         // start SMAPI console
+
         if (this.Settings.ListenForConsoleInput)
         {
             new Thread(
@@ -536,7 +603,11 @@ internal class SCore : IDisposable
                     commandManager: this.CommandManager,
                     reloadTranslations: this.ReloadTranslations,
                     handleInput: input => this.RawCommandQueue.Add(input),
-                    continueWhile: () => this.IsGameRunning && !this.IsExiting
+                    continueWhile: () =>
+                    {
+                        bool isContinue = this.IsGameRunning && !this.IsExiting;
+                        return isContinue;
+                    }
                 )
             ).Start();
         }
@@ -555,13 +626,94 @@ internal class SCore : IDisposable
 #endif
     }
 
+#if SMAPI_FOR_ANDROID
+    private void OnGameUpdateForModLoader(GameTime gameTime, Action runGameUpdate)
+    {
+        try
+        {
+            //assert load mods
+            switch (AndroidModLoaderManager.CurrentStatus)
+            {
+                case AndroidModLoaderManager.LoadStatus.Starting:
+                    //skip it, wait until loaded all mod
+                    AndroidModLoaderManager.TickUpdate();
+                    break;
+
+                case AndroidModLoaderManager.LoadStatus.LoadedAndNeedToConfirm:
+                    //confirm status
+                    //loaded all every thing
+                    //ready to run OnGameUpdating original
+                    Console.WriteLine("AndroidModLoader set status to LoadedConfirm");
+                    AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.LoadedConfirm;
+                    SGameRunner.Instance.OnGameUpdating = this.OnGameUpdateForContentLoaderAndroid;
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+    private void OnGameUpdateForContentLoaderAndroid(GameTime gameTime, Action runGameUpdate)
+    {
+        try
+        {
+            //wait until loaded content
+            switch (AndroidContentLoaderManager.LoadState)
+            {
+                case AndroidContentLoaderManager.LoadStateEnum.None:
+                case AndroidContentLoaderManager.LoadStateEnum.Loading:
+                    AndroidContentLoaderManager.UpdateMoveNextLoadContent();
+                    break;
+
+                case AndroidContentLoaderManager.LoadStateEnum.Loaded:
+                    //loaded all game asset
+                    Console.WriteLine("AndroidContentLoader set status to Loaded");
+                    break;
+            }
+
+            //wait until game has show splash screen icon
+            if (Game1.activeClickableMenu != null)
+            {
+                AndroidModLoaderManager.StopLoggerToScreen();
+                SGameRunner.Instance.OnGameUpdating = this.OnGameUpdating;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+    }
+
+#endif
     /// <summary>Raised when the game is updating its state (roughly 60 times per second).</summary>
     /// <param name="gameTime">A snapshot of the game timing state.</param>
     /// <param name="runGameUpdate">Invoke the game's update logic.</param>
+#if SMAPI_FOR_ANDROID
+    internal void OnGameUpdating(GameTime gameTime, Action runGameUpdate)
+    {
+        try
+        {
+            AndroidGameLoopManager.UpdateFrame_OnGameUpdating(gameTime);
+            if (AndroidGameLoopManager.IsSkipOriginalGameUpdating)
+            {
+                //var frames = new StackTrace().GetFrames();
+                //foreach (var f in frames)
+                //{
+                //    var method = f.GetMethod();
+                //    Console.WriteLine($" method: {method.DeclaringType}::{method}");
+                //}
+                return;
+            }
+#else
+
     private void OnGameUpdating(GameTime gameTime, Action runGameUpdate)
     {
         try
         {
+
+#endif
             /*********
             ** Safe queued work
             *********/
@@ -706,6 +858,7 @@ internal class SCore : IDisposable
             // This should *always* run, even when suppressing mod events, since the game uses
             // this too. For example, doing this after mod event suppression would prevent the
             // user from doing anything on the overnight shipping screen.
+
             SInputState inputState = instance.Input;
             if (this.Game.IsActive)
                 inputState.TrueUpdate();
@@ -715,6 +868,16 @@ internal class SCore : IDisposable
             *********/
             // Run async tasks synchronously to avoid issues due to mod events triggering
             // concurrently with game code.
+
+#if true
+            //run game loop with enumerator
+            if (Game1.currentLoader != null)
+            {
+                AndroidSaveLoaderManager.StartLoader();
+                return;
+            }
+#else
+
             bool saveParsed = false;
             if (Game1.currentLoader != null)
             {
@@ -755,12 +918,13 @@ internal class SCore : IDisposable
                 this.Monitor.Log("Game loader done.", Monitor.ContextLogLevel);
             }
 
+#endif
             // While a background task is in progress, the game may make changes to the game
             // state while mods are running their code. This is risky, because data changes can
             // conflict (e.g. collection changed during enumeration errors) and data may change
             // unexpectedly from one mod instruction to the next.
             //
-            // Therefore, we can just run Game1.Update here without raising any SMAPI events. There's
+            // Therefore we can just run Game1.Update here without raising any SMAPI events. There's
             // a small chance that the task will finish after we defer but before the game checks,
             // which means technically events should be raised, but the effects of missing one
             // update tick are negligible and not worth the complications of bypassing Game1.Update.
@@ -866,6 +1030,7 @@ internal class SCore : IDisposable
                     this.OnLoadStageChanged(LoadStage.None);
                 else if (Context.IsWorldReady && Context.LoadStage != LoadStage.Ready)
                 {
+                    //fixme
                     // print context
                     string context = $"Context: loaded save '{Constants.SaveFolderName}', starting {Game1.currentSeason} {Game1.dayOfMonth} Y{Game1.year}, locale set to {this.ContentCore.GetLocale()}.";
                     if (Context.IsMultiplayer)
@@ -882,8 +1047,11 @@ internal class SCore : IDisposable
                     this.UpdateWindowTitles();
 
                     // raise events
+                    this.Monitor.Log("Try OnLoadStageChanged to Ready");
                     this.OnLoadStageChanged(LoadStage.Ready);
+                    this.Monitor.Log("Try raise SaveLoaded");
                     events.SaveLoaded.RaiseEmpty();
+                    this.Monitor.Log("Try raise DayStarted");
                     events.DayStarted.RaiseEmpty();
                 }
 
@@ -1288,12 +1456,20 @@ internal class SCore : IDisposable
             this.RaiseRenderEvent(events.RenderingStep, spriteBatch, renderTarget, RenderingStepEventArgs.Instance(step));
     }
 
+#if SMAPI_FOR_ANDROID
+    public delegate void OnRenderedStepDelegate(RenderSteps step, SpriteBatch spriteBatch, RenderTarget2D? renderTarget);
+    public static event OnRenderedStepDelegate OnRenderedStepEvent;
+#endif
     /// <summary>Raised when the game finishes a render step in the draw loop.</summary>
     /// <param name="step">The render step being started.</param>
     /// <param name="spriteBatch">The sprite batch being drawn (which might not always be open yet).</param>
     /// <param name="renderTarget">The render target being drawn.</param>
     private void OnRenderedStep(RenderSteps step, SpriteBatch spriteBatch, RenderTarget2D? renderTarget)
     {
+#if SMAPI_FOR_ANDROID
+        OnRenderedStepEvent?.Invoke(step, spriteBatch, renderTarget);
+#endif
+
         var events = this.EventManager;
 
         switch (step)
@@ -1323,15 +1499,31 @@ internal class SCore : IDisposable
         this.RaiseRenderEvent(this.EventManager.Rendered, Game1.spriteBatch, renderTarget);
     }
 
+#if SMAPI_FOR_ANDROID
+    /// <summary>Raise the full-frame rendered event after the Android game has composited its render targets, but before MonoGame presents the backbuffer.</summary>
+    private void OnAndroidRendered(GameTime _)
+    {
+        Context.IsInDrawLoop = true;
+        try
+        {
+            this.RaiseRenderEvent(this.EventManager.Rendered, Game1.spriteBatch, renderTarget: null, useBackBuffer: true);
+        }
+        finally
+        {
+            Context.IsInDrawLoop = false;
+        }
+    }
+#endif
+
     /// <summary>Raise a rendering/rendered event, temporarily opening the given sprite batch if needed to let mods draw to it.</summary>
     /// <typeparam name="TEventArgs">The event args type to construct.</typeparam>
     /// <param name="event">The event to raise.</param>
     /// <param name="spriteBatch">The sprite batch being drawn to the screen.</param>
     /// <param name="renderTarget">The render target being drawn to the screen.</param>
-    private void RaiseRenderEvent<TEventArgs>(ManagedEvent<TEventArgs> @event, SpriteBatch spriteBatch, RenderTarget2D? renderTarget)
+    private void RaiseRenderEvent<TEventArgs>(ManagedEvent<TEventArgs> @event, SpriteBatch spriteBatch, RenderTarget2D? renderTarget, bool useBackBuffer = false)
         where TEventArgs : EventArgs, new()
     {
-        this.RaiseRenderEvent(@event, spriteBatch, renderTarget, Singleton<TEventArgs>.Instance);
+        this.RaiseRenderEvent(@event, spriteBatch, renderTarget, Singleton<TEventArgs>.Instance, useBackBuffer);
     }
 
     /// <summary>Raise a rendering/rendered event, temporarily opening the given sprite batch if needed to let mods draw to it.</summary>
@@ -1340,7 +1532,7 @@ internal class SCore : IDisposable
     /// <param name="spriteBatch">The sprite batch being drawn to the screen.</param>
     /// <param name="renderTarget">The render target being drawn to the screen.</param>
     /// <param name="eventArgs">The event arguments to pass to the event.</param>
-    private void RaiseRenderEvent<TEventArgs>(ManagedEvent<TEventArgs> @event, SpriteBatch spriteBatch, RenderTarget2D? renderTarget, TEventArgs eventArgs)
+    private void RaiseRenderEvent<TEventArgs>(ManagedEvent<TEventArgs> @event, SpriteBatch spriteBatch, RenderTarget2D? renderTarget, TEventArgs eventArgs, bool useBackBuffer = false)
         where TEventArgs : EventArgs
     {
         if (!@event.HasListeners)
@@ -1357,7 +1549,7 @@ internal class SCore : IDisposable
             if (!wasOpen)
                 Game1.spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
 
-            if (!hadRenderTarget)
+            if (!hadRenderTarget && !useBackBuffer)
             {
                 renderTarget ??= Game1.game1.uiScreen?.IsDisposed != true
                     ? Game1.game1.uiScreen
@@ -1402,40 +1594,6 @@ internal class SCore : IDisposable
     {
         if (this.EventManager.AssetsInvalidated.HasListeners)
             this.EventManager.AssetsInvalidated.Raise(new AssetsInvalidatedEventArgs(assetNames, assetNames.Select(p => p.GetBaseAssetName())));
-    }
-
-    /// <summary>Reload the SMAPI settings.</summary>
-    /// <exception cref="InvalidOperationException">The intern</exception>
-    [MemberNotNull(nameof(SCore.Settings))]
-    private void ReloadSettings()
-    {
-        JsonSerializerSettings deserializerSettings = new() { NullValueHandling = NullValueHandling.Ignore };
-
-        // load default settings
-        SConfig? settings = JsonConvert.DeserializeObject<SConfig>(File.ReadAllText(Constants.ApiConfigPath));
-        if (settings is null)
-        {
-            if (this.Settings is null)
-                throw new InvalidOperationException("The 'smapi-internal/config.json' file is missing or invalid. You can reinstall SMAPI to fix this.");
-
-            this.Monitor.Log("Could not load updated settings from the 'smapi-internal/config.json' file. Keeping the settings as-is.", LogLevel.Warn);
-            return;
-        }
-
-        // load user settings
-        if (File.Exists(Constants.ApiUserConfigPath))
-            JsonConvert.PopulateObject(File.ReadAllText(Constants.ApiUserConfigPath), settings, deserializerSettings);
-        if (File.Exists(Constants.ApiModGroupConfigPath))
-            JsonConvert.PopulateObject(File.ReadAllText(Constants.ApiModGroupConfigPath), settings, deserializerSettings);
-        if (this.OverrideDeveloperMode.HasValue)
-            settings.OverrideDeveloperMode(this.OverrideDeveloperMode.Value);
-
-        // apply
-        this.Settings = settings;
-
-        // update log manager if already initialized
-        // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract
-        this.LogManager?.ApplySettings(settings.ConsoleColorScheme, settings.ConsoleColorSchemes, settings.VerboseLogging, this.OverrideDeveloperMode ?? settings.DeveloperMode);
     }
 
     /// <summary>Get the load/edit operations to apply to an asset by querying registered <see cref="IContentEvents.AssetRequested"/> event handlers.</summary>
@@ -1585,6 +1743,9 @@ internal class SCore : IDisposable
     /// <summary>Set the titles for the game and console windows.</summary>
     private void UpdateWindowTitles()
     {
+#if SMAPI_FOR_ANDROID
+        return;
+#endif
         string consoleTitle = $"SMAPI {Constants.ApiVersion} - running Stardew Valley {Constants.GameVersion}";
         string gameTitle = $"Stardew Valley {Constants.GameVersion} - running SMAPI {Constants.ApiVersion}";
 
@@ -1956,6 +2117,8 @@ internal class SCore : IDisposable
         IList<IModMetadata> skippedMods = new List<IModMetadata>();
         using (AssemblyLoader modAssemblyLoader = new(Constants.Platform, this.Monitor, this.Settings.ParanoidWarnings, this.Settings.RewriteMods, this.Settings.LogTechnicalDetailsForBrokenMods))
         {
+            this.Monitor.Log($"Resolved {mods.Length} mod manifest(s).", LogLevel.Debug);
+
             // init
             HashSet<string> suppressUpdateChecks = this.Settings.SuppressUpdateChecks;
             IInterfaceProxyFactory proxyFactory = new InterfaceProxyFactory();
@@ -1980,6 +2143,7 @@ internal class SCore : IDisposable
 
         // log mod info
         this.LogManager.LogModInfo(loaded, loadedContentPacks, loadedMods, skippedMods.ToArray(), this.Settings.ParanoidWarnings, this.Settings.LogTechnicalDetailsForBrokenMods, this.Settings.FixHarmony);
+        this.Monitor.Log($"Registered {loadedMods.Length} code mod(s) and {loadedContentPacks.Length} content pack(s).", LogLevel.Debug);
 
         // initialize translations
         this.ReloadTranslations(loaded);
@@ -1998,7 +2162,11 @@ internal class SCore : IDisposable
                 // call entry method
                 try
                 {
+#if SMAPI_FOR_ANDROID
+                    AndroidModLoaderManager.TryStartModEntry(mod);
+#else
                     mod.Entry(mod.Helper);
+#endif
                 }
                 catch (Exception ex)
                 {
@@ -2030,6 +2198,8 @@ internal class SCore : IDisposable
             }
             Context.HeuristicModsRunningCode.TryPop(out _);
         }
+
+        this.Monitor.Log("Finished launching mods.", LogLevel.Debug);
 
         // unlock mod integrations
         this.ModRegistry.AreAllModsInitialized = true;

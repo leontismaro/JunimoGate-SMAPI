@@ -50,22 +50,9 @@ static class MiniMonoModHotfix
 
     public static void Apply()
     {
-        var harmony = new Harmony("MiniMonoModHotfix");
-
-        harmony.Patch(
-            original: typeof(Harmony).Assembly
-                .GetType("HarmonyLib.MethodBodyReader", throwOnError: true)!
-                .GetMethod("ReadOperand", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
-            transpiler: new HarmonyMethod(typeof(MiniMonoModHotfix), nameof(ResolveTokenFix))
-        );
-
-        harmony.Patch(
-            original: typeof(MonoMod.Utils.ReflectionHelper).Assembly
-                .GetType("MonoMod.Utils.DynamicMethodDefinition+<>c__DisplayClass3_0", throwOnError: true)!
-                .GetMethod("<_CopyMethodToDefinition>g__ResolveTokenAs|1", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
-            transpiler: new HarmonyMethod(typeof(MiniMonoModHotfix), nameof(ResolveTokenFix))
-        );
-
+        // The original workaround targets .NET Framework's reflection cache ordering.
+        // Stock .NET 9 Android and the pinned Harmony build no longer expose those
+        // private MonoMod implementation types, so there is nothing to patch here.
     }
 
     private static IEnumerable<CodeInstruction> ResolveTokenFix(IEnumerable<CodeInstruction> instructions)
@@ -102,7 +89,7 @@ static class MiniMonoModHotfix
 
     public static Type? GetRealDeclaringType(this MemberInfo member)
     {
-        return member.DeclaringType ?? member.Module.GetModuleType();
+        return member.DeclaringType;
     }
 
     public static void FixReflectionCache(this Type? type)

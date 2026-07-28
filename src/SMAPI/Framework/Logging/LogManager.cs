@@ -3,13 +3,17 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
+using Android.App;
+using Microsoft.Xna.Framework;
 using StardewModdingAPI.Framework.Commands;
 using StardewModdingAPI.Framework.Models;
 using StardewModdingAPI.Framework.ModLoading;
 using StardewModdingAPI.Internal;
 using StardewModdingAPI.Internal.ConsoleWriting;
+using StardewModdingAPI.Mobile;
 using StardewModdingAPI.Toolkit.Framework.ModData;
 using StardewModdingAPI.Toolkit.Utilities;
 using StardewValley;
@@ -27,12 +31,6 @@ internal class LogManager : IDisposable
 
     /// <summary>Create a monitor instance given the ID and name.</summary>
     private readonly Func<string, string, Monitor> GetMonitorImpl;
-
-    /// <summary>The console writer which sends color-coded text to the console.</summary>
-    private readonly ColorfulConsoleWriter ConsoleWriter;
-
-    /// <summary>The monitors managed by SMAPI.</summary>
-    private readonly List<Monitor> Monitors = [];
 
 
     /*********
@@ -53,26 +51,30 @@ internal class LogManager : IDisposable
     ****/
     /// <summary>Construct an instance.</summary>
     /// <param name="logPath">The log file path to write.</param>
-    /// <param name="colorSchemeId">The color scheme ID in <paramref name="colorConfig"/> to use, or <see cref="MonitorColorScheme.AutoDetect"/> to select one automatically.</param>
     /// <param name="colorConfig">The colors to use for text written to the SMAPI console.</param>
     /// <param name="writeToConsole">Whether to output log messages to the console.</param>
     /// <param name="verboseLogging">The log contexts for which to enable verbose logging, which may show a lot more information to simplify troubleshooting.</param>
     /// <param name="isDeveloperMode">Whether to enable full console output for developers.</param>
     /// <param name="getScreenIdForLog">Get the screen ID that should be logged to distinguish between players in split-screen mode, if any.</param>
-    public LogManager(string logPath, MonitorColorScheme colorSchemeId, Dictionary<MonitorColorScheme, Dictionary<ConsoleLogLevel, ConsoleColor>> colorConfig, bool writeToConsole, HashSet<string> verboseLogging, bool isDeveloperMode, Func<int?> getScreenIdForLog)
+    public LogManager(string logPath, ColorSchemeConfig colorConfig, bool writeToConsole, HashSet<string> verboseLogging, bool isDeveloperMode, Func<int?> getScreenIdForLog)
     {
         // init log file
         this.LogFile = new LogFileManager(logPath);
 
         // init monitor
-        this.ConsoleWriter = new ColorfulConsoleWriter(Constants.Platform, colorSchemeId, colorConfig);
-        this.GetMonitorImpl = (id, name) => this.CreateAndRegisterMonitor(id, name, verboseLogging, getScreenIdForLog, writeToConsole, isDeveloperMode);
-
+        this.GetMonitorImpl = (id, name) => new Monitor(name, this.LogFile, colorConfig, verboseLogging.Contains("*") || verboseLogging.Contains(id), getScreenIdForLog)
+        {
+            WriteToConsole = writeToConsole,
+            ShowTraceInConsole = isDeveloperMode,
+            ShowFullStampInConsole = isDeveloperMode
+        };
         this.Monitor = this.GetMonitor("SMAPI", "SMAPI");
         this.MonitorForGame = this.GetMonitor("game", "game");
 
+
         // enable Unicode handling on Windows
         // (the terminal defaults to UTF-8 on Linux/macOS)
+
 #if SMAPI_FOR_WINDOWS
         Console.InputEncoding = Encoding.Unicode;
         Console.OutputEncoding = Encoding.Unicode;
@@ -91,20 +93,11 @@ internal class LogManager : IDisposable
     /// <param name="title">The new window title.</param>
     public void SetConsoleTitle(string title)
     {
+#if SMAPI_FOR_ANDROID
+        return;
+#endif
+
         Console.Title = title;
-    }
-
-    /// <summary>Apply the SMAPI settings to the log manager and its managed monitors.</summary>
-    /// <param name="colorSchemeId">The color scheme ID in <paramref name="colorSchemes"/> to use, or <see cref="MonitorColorScheme.AutoDetect"/> to select one automatically.</param>
-    /// <param name="colorSchemes">The colors to use for text written to the SMAPI console.</param>
-    /// <param name="verboseLogging">The log contexts for which to enable verbose logging, which may show a lot more information to simplify troubleshooting.</param>
-    /// <param name="isDeveloperMode">Whether to enable full console output for developers.</param>
-    public void ApplySettings(MonitorColorScheme colorSchemeId, Dictionary<MonitorColorScheme, Dictionary<ConsoleLogLevel, ConsoleColor>> colorSchemes, HashSet<string> verboseLogging, bool isDeveloperMode)
-    {
-        foreach (Monitor monitor in this.Monitors)
-            this.ApplySettings(monitor, verboseLogging, isDeveloperMode);
-
-        this.ConsoleWriter.SetColors(colorSchemeId, colorSchemes);
     }
 
     /****
@@ -127,7 +120,11 @@ internal class LogManager : IDisposable
             while (true)
             {
                 // get input
+#if SMAPI_FOR_ANDROID
+                string? input = MobileConsoleTool.ReadLine();
+#else
                 string? input = Console.ReadLine();
+#endif
                 if (string.IsNullOrWhiteSpace(input))
                     continue;
 
@@ -154,6 +151,11 @@ internal class LogManager : IDisposable
     /// <param name="showMessage">Whether to print a 'press any key to exit' message to the console.</param>
     public void PressAnyKeyToExit(bool showMessage)
     {
+#if SMAPI_FOR_ANDROID
+        SMAPIActivityTool.ExitGame();
+        return;
+#endif
+
         if (showMessage)
             this.Monitor.Log("Game has ended. Press any key to exit.");
         Thread.Sleep(100);
@@ -238,12 +240,29 @@ internal class LogManager : IDisposable
     public void LogIntro(string modsPath, IDictionary<string, object?> customSettings)
     {
         // log platform
+#if SMAPI_FOR_ANDROID
+        {
+            var smapiBuild = SMAPIAndroidBuild.BuildCode;
+            this.Monitor.Log($"SMAPI v{Constants.ApiVersionForAndroid} - {smapiBuild}" +
+                $" with Stardew Valley {Game1.GetVersionString()}" +
+                $" on {EnvironmentUtility.GetFriendlyPlatformName(Constants.Platform)}", LogLevel.Info);
+            var launcherBuild = LauncherAppInfo.CurrentBuild;
+            var launcherVersion = LauncherAppInfo.CurrentVersion;
+            this.Monitor.Log($"Launcher v{launcherVersion} - {launcherBuild}", LogLevel.Info);
+        }
+#else
         this.Monitor.Log($"SMAPI {Constants.ApiVersion} with Stardew Valley {Game1.GetVersionString()} on {EnvironmentUtility.GetFriendlyPlatformName(Constants.Platform)}", LogLevel.Info);
+#endif
+
 
         // log basic info
         this.Monitor.Log($"Mods go here: {PathUtilities.AnonymizePathForDisplay(modsPath)}", LogLevel.Info);
+#if SMAPI_FOR_ANDROID
+        //
+#else
         if (modsPath != Constants.DefaultModsPath)
             this.Monitor.Log($"(Using custom --mods-path argument. Game folder: {PathUtilities.AnonymizePathForDisplay(Constants.GamePath)}.)");
+#endif
         this.Monitor.Log($"Log started at {DateTime.UtcNow:s} UTC");
 
         // log custom settings
@@ -266,9 +285,14 @@ internal class LogManager : IDisposable
             this.Monitor.Log("You disabled mod blacklist updates, so you may not be protected from known malicious mods. You can undo this by reinstalling SMAPI.", LogLevel.Warn);
         if (!settings.RewriteMods)
             this.Monitor.Log("You disabled rewriting broken mods, so many older mods may fail to load. You can undo this by reinstalling SMAPI.", LogLevel.Info);
+
+#if SMAPI_FOR_ANDROID
+        //no need to print
+#else
         if (!this.Monitor.WriteToConsole)
             this.Monitor.Log("Writing to the terminal is disabled because the --no-terminal argument was received. This usually means launching the terminal failed.", LogLevel.Warn);
 
+#endif
         // verbose logging
         this.Monitor.VerboseLog("Verbose logging enabled.");
     }
@@ -349,38 +373,6 @@ internal class LogManager : IDisposable
     /*********
     ** Protected methods
     *********/
-    /// <summary>Create and register a monitor instance.</summary>
-    /// <param name="modId">The mod ID, if applicable.</param>
-    /// <param name="source">The name of the module which logs messages using this instance.</param>
-    /// <param name="verboseLogging">The log contexts for which to enable verbose logging, which may show a lot more information to simplify troubleshooting.</param>
-    /// <param name="getScreenIdForLog">Get the screen ID that should be logged to distinguish between players in split-screen mode, if any.</param>
-    /// <param name="writeToConsole">Whether to write anything to the console. This should be disabled if no console is available.</param>
-    /// <param name="isDeveloperMode">Whether to enable full console output for developers.</param>
-    private Monitor CreateAndRegisterMonitor(string modId, string source, HashSet<string> verboseLogging, Func<int?> getScreenIdForLog, bool writeToConsole, bool isDeveloperMode)
-    {
-        Monitor monitor = new(modId, source, this.LogFile, this.ConsoleWriter, getScreenIdForLog)
-        {
-            WriteToConsole = writeToConsole
-        };
-
-        this.ApplySettings(monitor, verboseLogging, isDeveloperMode);
-
-        this.Monitors.Add(monitor);
-
-        return monitor;
-    }
-
-    /// <summary>Apply the SMAPI settings to a managed monitor.</summary>
-    /// <param name="monitor">The monitor to update.</param>
-    /// <param name="verboseLogging">The log contexts for which to enable verbose logging, which may show a lot more information to simplify troubleshooting.</param>
-    /// <param name="isDeveloperMode">Whether to enable full console output for developers.</param>
-    private void ApplySettings(Monitor monitor, HashSet<string> verboseLogging, bool isDeveloperMode)
-    {
-        monitor.IsVerbose = verboseLogging.Contains("*") || verboseLogging.Contains(monitor.ModId);
-        monitor.ShowTraceInConsole = isDeveloperMode;
-        monitor.ShowFullStampInConsole = isDeveloperMode;
-    }
-
     /// <summary>Write a summary of mod warnings to the console and log.</summary>
     /// <param name="mods">The loaded mods.</param>
     /// <param name="skippedMods">The mods which could not be loaded.</param>

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
@@ -21,7 +22,7 @@ internal class GamePadStateBuilder : IInputStateBuilder<GamePadStateBuilder, Gam
     private GamePadState? State;
 
     /// <summary>The current button states.</summary>
-    private readonly Dictionary<SButton, ButtonState> ButtonStates = [];
+    private readonly IDictionary<SButton, ButtonState>? ButtonStates;
 
     /// <summary>The left trigger value.</summary>
     private float LeftTrigger;
@@ -37,57 +38,61 @@ internal class GamePadStateBuilder : IInputStateBuilder<GamePadStateBuilder, Gam
 
 
     /*********
+    ** Accessors
+    *********/
+    /// <summary>Whether the gamepad is currently connected.</summary>
+    [MemberNotNullWhen(true, nameof(GamePadStateBuilder.ButtonStates))]
+    public bool IsConnected { get; }
+
+
+    /*********
     ** Public methods
     *********/
-    /// <inheritdoc />
-    public void Reset(GamePadState state)
+    /// <summary>Construct an instance.</summary>
+    /// <param name="state">The initial state.</param>
+    public GamePadStateBuilder(GamePadState state)
     {
         this.State = state;
+        this.IsConnected = state.IsConnected;
 
-        if (state.IsConnected)
+        if (!this.IsConnected)
+            return;
+
+        GamePadDPad pad = state.DPad;
+        GamePadButtons buttons = state.Buttons;
+        GamePadTriggers triggers = state.Triggers;
+        GamePadThumbSticks sticks = state.ThumbSticks;
+        this.ButtonStates = new Dictionary<SButton, ButtonState>
         {
-            GamePadDPad pad = state.DPad;
-            GamePadButtons buttons = state.Buttons;
-            GamePadTriggers triggers = state.Triggers;
-            GamePadThumbSticks sticks = state.ThumbSticks;
+            [SButton.DPadUp] = pad.Up,
+            [SButton.DPadDown] = pad.Down,
+            [SButton.DPadLeft] = pad.Left,
+            [SButton.DPadRight] = pad.Right,
 
-            var states = this.ButtonStates;
-            states.Clear();
-            states[SButton.DPadUp] = pad.Up;
-            states[SButton.DPadDown] = pad.Down;
-            states[SButton.DPadLeft] = pad.Left;
-            states[SButton.DPadRight] = pad.Right;
-            states[SButton.ControllerA] = buttons.A;
-            states[SButton.ControllerB] = buttons.B;
-            states[SButton.ControllerX] = buttons.X;
-            states[SButton.ControllerY] = buttons.Y;
-            states[SButton.LeftStick] = buttons.LeftStick;
-            states[SButton.RightStick] = buttons.RightStick;
-            states[SButton.LeftShoulder] = buttons.LeftShoulder;
-            states[SButton.RightShoulder] = buttons.RightShoulder;
-            states[SButton.ControllerBack] = buttons.Back;
-            states[SButton.ControllerStart] = buttons.Start;
-            states[SButton.BigButton] = buttons.BigButton;
-
-            this.LeftTrigger = triggers.Left;
-            this.RightTrigger = triggers.Right;
-            this.LeftStickPos = sticks.Left;
-            this.RightStickPos = sticks.Right;
-        }
-        else
-        {
-            this.ButtonStates.Clear();
-
-            this.LeftTrigger = 0;
-            this.RightTrigger = 0;
-            this.LeftStickPos = Vector2.Zero;
-            this.RightStickPos = Vector2.Zero;
-        }
+            [SButton.ControllerA] = buttons.A,
+            [SButton.ControllerB] = buttons.B,
+            [SButton.ControllerX] = buttons.X,
+            [SButton.ControllerY] = buttons.Y,
+            [SButton.LeftStick] = buttons.LeftStick,
+            [SButton.RightStick] = buttons.RightStick,
+            [SButton.LeftShoulder] = buttons.LeftShoulder,
+            [SButton.RightShoulder] = buttons.RightShoulder,
+            [SButton.ControllerBack] = buttons.Back,
+            [SButton.ControllerStart] = buttons.Start,
+            [SButton.BigButton] = buttons.BigButton
+        };
+        this.LeftTrigger = triggers.Left;
+        this.RightTrigger = triggers.Right;
+        this.LeftStickPos = sticks.Left;
+        this.RightStickPos = sticks.Right;
     }
 
     /// <inheritdoc />
     public GamePadStateBuilder OverrideButtons(IDictionary<SButton, SButtonState> overrides)
     {
+        if (!this.IsConnected)
+            return this;
+
         foreach (var pair in overrides)
         {
             bool changed = true;
@@ -133,7 +138,10 @@ internal class GamePadStateBuilder : IInputStateBuilder<GamePadStateBuilder, Gam
 
                 // buttons
                 default:
-                    this.ButtonStates[pair.Key] = isDown ? ButtonState.Pressed : ButtonState.Released;
+                    if (this.ButtonStates.ContainsKey(pair.Key))
+                        this.ButtonStates[pair.Key] = isDown ? ButtonState.Pressed : ButtonState.Released;
+                    else
+                        changed = false;
                     break;
             }
 
@@ -147,6 +155,9 @@ internal class GamePadStateBuilder : IInputStateBuilder<GamePadStateBuilder, Gam
     /// <inheritdoc />
     public IEnumerable<SButton> GetPressedButtons()
     {
+        if (!this.IsConnected)
+            yield break;
+
         // buttons
         foreach (Buttons button in this.GetPressedGamePadButtons())
             yield return button.ToSButton();
@@ -202,6 +213,9 @@ internal class GamePadStateBuilder : IInputStateBuilder<GamePadStateBuilder, Gam
     /// <summary>Get the pressed gamepad buttons.</summary>
     private IEnumerable<Buttons> GetPressedGamePadButtons()
     {
+        if (!this.IsConnected)
+            yield break;
+
         foreach (var pair in this.ButtonStates)
         {
             if (pair.Value == ButtonState.Pressed && pair.Key.TryGetController(out Buttons button))

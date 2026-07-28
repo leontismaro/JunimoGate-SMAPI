@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using StardewModdingAPI.Mobile;
 using StardewModdingAPI.Framework.Logging;
 using StardewModdingAPI.Internal.ConsoleWriting;
 
@@ -34,31 +35,19 @@ internal class Monitor : IMonitor
     /// <summary>Get the screen ID that should be logged to distinguish between players in split-screen mode, if any.</summary>
     private readonly Func<int?> GetScreenIdForLog;
 
+    public readonly object _lock = new object();
 
     /*********
     ** Accessors
     *********/
-    /// <summary>The mod ID, if applicable.</summary>
-    public string ModId { get; }
-
     /// <summary>Whether to log basic contextual info (like buttons pressed and menus opened) even if <see cref="IsVerbose"/> is disabled.</summary>
     public static bool ForceLogContext { get; set; }
-
-    /// <summary>The log contexts for which to enable verbose logging regardless of the configured settings.</summary>
-    public static HashSet<string> ForceVerboseLogging { get; } = [];
-
-    /// <summary>Whether to force verbose logging for SMAPI and all mods.</summary>
-    public static bool ForceVerboseLoggingForAll { get; set; }
 
     /// <summary>The current log level for contextual info that's relevant to the <see cref="ForceLogContext"/> flag.</summary>
     public static LogLevel ContextLogLevel => Monitor.ForceLogContext ? LogLevel.Info : LogLevel.Trace;
 
     /// <inheritdoc />
-    public bool IsVerbose
-    {
-        get => field || Monitor.ForceVerboseLoggingForAll || Monitor.ForceVerboseLogging.Contains(this.ModId);
-        set => field = value;
-    }
+    public bool IsVerbose { get; }
 
     /// <summary>Whether to show the full log stamps (with time/level/logger) in the console. If false, shows a simplified stamp with only the logger.</summary>
     internal bool ShowFullStampInConsole { get; set; }
@@ -74,22 +63,22 @@ internal class Monitor : IMonitor
     ** Public methods
     *********/
     /// <summary>Construct an instance.</summary>
-    /// <param name="modId">The mod ID, if applicable.</param>
     /// <param name="source">The name of the module which logs messages using this instance.</param>
     /// <param name="logFile">The log file to which to write messages.</param>
-    /// <param name="consoleWriter">Handles writing text to the console.</param>
+    /// <param name="colorConfig">The colors to use for text written to the SMAPI console.</param>
+    /// <param name="isVerbose">Whether verbose logging is enabled. This enables more detailed diagnostic messages than are normally needed.</param>
     /// <param name="getScreenIdForLog">Get the screen ID that should be logged to distinguish between players in split-screen mode, if any.</param>
-    public Monitor(string modId, string source, LogFileManager logFile, IConsoleWriter consoleWriter, Func<int?> getScreenIdForLog)
+    public Monitor(string source, LogFileManager logFile, ColorSchemeConfig colorConfig, bool isVerbose, Func<int?> getScreenIdForLog)
     {
         // validate
         if (string.IsNullOrWhiteSpace(source))
             throw new ArgumentException("The log source cannot be empty.");
 
         // initialize
-        this.ModId = modId;
         this.Source = source;
         this.LogFile = logFile ?? throw new ArgumentNullException(nameof(logFile), "The log file manager cannot be null.");
-        this.ConsoleWriter = consoleWriter ?? throw new ArgumentNullException(nameof(consoleWriter), "The console writer cannot be null.");
+        this.ConsoleWriter = new ColorfulConsoleWriter(Constants.Platform, colorConfig);
+        this.IsVerbose = isVerbose;
         this.GetScreenIdForLog = getScreenIdForLog;
     }
 
@@ -102,30 +91,43 @@ internal class Monitor : IMonitor
     /// <inheritdoc />
     public void LogOnce(string message, LogLevel level = LogLevel.Trace)
     {
-        if (this.LogOnceCache.Add(new LogOnceCacheKey(message, level)))
-            this.LogImpl(this.Source, message, (ConsoleLogLevel)level);
+        lock (this._lock)
+        {
+            if (this.LogOnceCache.Add(new LogOnceCacheKey(message, level)))
+                this.LogImpl(this.Source, message, (ConsoleLogLevel)level);
+        }
     }
 
     /// <inheritdoc />
     public void VerboseLog(string message)
     {
-        if (this.IsVerbose)
-            this.Log(message);
+        lock (this._lock)
+        {
+            if (this.IsVerbose)
+                this.Log(message);
+        }
     }
 
     /// <inheritdoc />
     public void VerboseLog([InterpolatedStringHandlerArgument("")] ref VerboseLogStringHandler message)
     {
-        if (this.IsVerbose)
-            this.Log(message.ToString());
+        lock (this._lock)
+        {
+            if (this.IsVerbose)
+                this.Log(message.ToString());
+        }
     }
 
     /// <summary>Write a newline to the console and log file.</summary>
     internal void Newline()
     {
-        if (this.WriteToConsole)
-            Console.WriteLine();
-        this.LogFile.WriteLine("");
+        lock (this._lock)
+        {
+            if (this.WriteToConsole)
+                Console.WriteLine();
+            this.LogFile.WriteLine("");
+            AndroidLogger.Log("");
+        }
     }
 
     /// <summary>Log a fatal error message.</summary>
@@ -139,9 +141,13 @@ internal class Monitor : IMonitor
     /// <param name="input">The user input to log.</param>
     internal void LogUserInput(string input)
     {
-        // user input already appears in the console, so just need to write to file
-        string prefix = this.GenerateMessagePrefix(this.Source, (ConsoleLogLevel)LogLevel.Info);
-        this.LogFile.WriteLine($"{prefix} $>{input}");
+        lock (this._lock)
+        {
+            // user input already appears in the console, so just need to write to file
+            string prefix = this.GenerateMessagePrefix(this.Source, (ConsoleLogLevel)LogLevel.Info);
+            this.LogFile.WriteLine($"{prefix} $>{input}");
+            AndroidLogger.Log($"{prefix} $>{input}");
+        }
     }
 
 
@@ -154,18 +160,48 @@ internal class Monitor : IMonitor
     /// <param name="level">The log level.</param>
     private void LogImpl(string source, string message, ConsoleLogLevel level)
     {
-        // generate message
-        string prefix = this.GenerateMessagePrefix(source, level);
-        string fullMessage = $"{prefix} {message}";
-        string consoleMessage = this.ShowFullStampInConsole ? fullMessage : $"[{source}] {message}";
+        lock (this._lock)
+        {
+            // generate message
+            string prefix = this.GenerateMessagePrefix(source, level);
+            string fullMessage = $"{prefix} {message}";
+            string consoleMessage = this.ShowFullStampInConsole ? fullMessage : $"[{source}] {message}";
 
-        // write to console
-        if (this.WriteToConsole && (this.ShowTraceInConsole || level != ConsoleLogLevel.Trace || Monitor.ForceVerboseLoggingForAll || Monitor.ForceVerboseLogging.Contains(this.ModId)))
-            this.ConsoleWriter.WriteLine(consoleMessage, level);
+            // write to console
+            if (this.WriteToConsole && (this.ShowTraceInConsole || level != ConsoleLogLevel.Trace))
+                this.ConsoleWriter.WriteLine(consoleMessage, level);
 
-        // write to log file
-        this.LogFile.WriteLine(fullMessage);
+            // write to log file
+            this.LogFile.WriteLine(fullMessage);
+#if SMAPI_FOR_ANDROID
+            AndroidLogger.Log(fullMessage);
+            lock (_lock_OnLogImpl)
+            {
+                _OnLogImpl?.Invoke(level, fullMessage);
+            }
+#endif
+        }
     }
+
+#if SMAPI_FOR_ANDROID
+    static object _lock_OnLogImpl = new();
+    static Action<ConsoleLogLevel, string> _OnLogImpl;
+    internal static void RegisterOnLogImpl(Action<ConsoleLogLevel, string> callback)
+    {
+        lock (_lock_OnLogImpl)
+        {
+            _OnLogImpl += callback;
+        }
+    }
+    internal static void UnregisterOnLogImpl(Action<ConsoleLogLevel, string> callback)
+    {
+        lock (_lock_OnLogImpl)
+        {
+            _OnLogImpl -= callback;
+        }
+    }
+#endif
+
 
     /// <summary>Generate a message prefix for the current time.</summary>
     /// <param name="source">The name of the mod logging the message.</param>

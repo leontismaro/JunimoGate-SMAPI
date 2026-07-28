@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using Mono.Cecil;
+using StardewModdingAPI.AndroidHost;
 using StardewModdingAPI.Toolkit.Utilities;
 
 namespace StardewModdingAPI.Framework.ModLoading;
@@ -51,8 +53,44 @@ internal class PlatformAssemblyMap : IDisposable
         // cache assembly metadata
         this.Targets = targetAssemblies;
         this.TargetReferences = this.Targets.ToDictionary(assembly => assembly, assembly => AssemblyNameReference.Parse(assembly.FullName));
+
+#if SMAPI_FOR_ANDROID
+        //src code https://github.com/ZaneYork/SMAPI/blob/bfb0adb849310f6928f299f0f92d2eae3242da84/src/SMAPI/Framework/ModLoading/PlatformAssemblyMap.cs#L57
+        this.TargetModules = this.Targets.ToDictionary(
+            assembly => assembly,
+            assembly =>
+            {
+                string assemblyFullPath = ResolveAndroidAssemblyPath(assembly);
+                var module = ModuleDefinition.ReadModule(assemblyFullPath, new ReaderParameters { InMemory = true });
+                return module;
+            });
+#else
         this.TargetModules = this.Targets.ToDictionary(assembly => assembly, assembly => ModuleDefinition.ReadModule(assembly.Modules.Single().FullyQualifiedName, new ReaderParameters { InMemory = true }));
+#endif
     }
+
+#if SMAPI_FOR_ANDROID
+    private static string ResolveAndroidAssemblyPath(Assembly assembly)
+    {
+        string location = assembly.Location;
+        if (File.Exists(location))
+            return location;
+
+        string name = assembly.GetName().Name ?? throw new InvalidDataException("A target assembly has no simple name.");
+        string gamePath = Path.Combine(Constants.GamePath, "assemblies", name + ".dll");
+        if (File.Exists(gamePath))
+            return gamePath;
+
+        if (AndroidHostServices.ManagedAssemblyDirectory is { } managedDirectory)
+        {
+            string managedPath = Path.Combine(managedDirectory, name + ".dll");
+            if (File.Exists(managedPath))
+                return managedPath;
+        }
+
+        throw new FileNotFoundException($"No readable Cecil metadata image was provisioned for target assembly '{name}'.", location);
+    }
+#endif
 
     /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
     public void Dispose()

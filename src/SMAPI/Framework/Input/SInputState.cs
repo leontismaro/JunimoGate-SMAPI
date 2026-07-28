@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
+using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using StardewValley;
+using static Android.Renderscripts.ScriptGroup;
 
 #pragma warning disable 809 // obsolete override of non-obsolete method (this is deliberate)
 namespace StardewModdingAPI.Framework.Input;
@@ -28,15 +32,6 @@ internal sealed class SInputState : InputState
 
     /// <summary>Whether there are new overrides in <see cref="CustomPressedKeys"/> or <see cref="CustomReleasedKeys"/> that haven't been applied to the previous state.</summary>
     private bool HasNewOverrides;
-
-    /// <summary>The builder which reads the game pad state and applies overrides.</summary>
-    private readonly GamePadStateBuilder ControllerStateBuilder = new();
-
-    /// <summary>The builder which reads the keyboard state and applies overrides.</summary>
-    private readonly KeyboardStateBuilder KeyboardStateBuilder = new();
-
-    /// <summary>The builder which reads the mouse state and applies overrides.</summary>
-    private readonly MouseStateBuilder MouseStateBuilder = new();
 
 
     /*********
@@ -71,24 +66,36 @@ internal sealed class SInputState : InputState
         // update base state
         base.Update();
 
+#if SMAPI_FOR_ANDROID
+        //it important
+        //because _currentTouchState it's need update  into _currentMouseState
+        //and _currentGamepadState too
+        base.UpdateStates();//Don't forget update Input State first
+#endif
+
         // update SMAPI extended data
         // note: Stardew Valley is *not* in UI mode when this code runs
         try
         {
             float zoomMultiplier = (1f / Game1.options.zoomLevel);
 
-            // get builders
-            GamePadStateBuilder controller = this.ControllerStateBuilder;
-            KeyboardStateBuilder keyboard = this.KeyboardStateBuilder;
-            MouseStateBuilder mouse = this.MouseStateBuilder;
-
             // get real values
-            controller.Reset(base.GetGamePadState());
-            keyboard.Reset(base.GetKeyboardState());
-            mouse.Reset(base.GetMouseState());
+            var controller = new GamePadStateBuilder(base.GetGamePadState());
+            var keyboard = new KeyboardStateBuilder(base.GetKeyboardState());
+            var mouse = new MouseStateBuilder(base.GetMouseState());
             Vector2 cursorAbsolutePos = new((mouse.X * zoomMultiplier) + Game1.viewport.X, (mouse.Y * zoomMultiplier) + Game1.viewport.Y);
             Vector2? playerTilePos = Context.IsPlayerFree ? Game1.player.Tile : null;
             HashSet<SButton> reallyDown = new(this.GetPressedButtons(keyboard, mouse, controller));
+
+            // Binding Back button to Escape
+            foreach (var btn in keyboard.GetPressedButtons())
+            {
+                if (btn == SButton.Back)
+                {
+                    this.OverrideButton(SButton.Escape, true);
+                    break;
+                }
+            }
 
             // apply overrides
             bool hasOverrides = false;
@@ -173,13 +180,9 @@ internal sealed class SInputState : InputState
     {
         if (this.HasNewOverrides)
         {
-            GamePadStateBuilder controller = this.ControllerStateBuilder;
-            KeyboardStateBuilder keyboard = this.KeyboardStateBuilder;
-            MouseStateBuilder mouse = this.MouseStateBuilder;
-
-            controller.Reset(this.ControllerState);
-            keyboard.Reset(this.KeyboardState);
-            mouse.Reset(this.MouseState);
+            var controller = new GamePadStateBuilder(this.ControllerState);
+            var keyboard = new KeyboardStateBuilder(this.KeyboardState);
+            var mouse = new MouseStateBuilder(this.MouseState);
 
             if (this.ApplyOverrides(pressed: this.CustomPressedKeys, released: this.CustomReleasedKeys, controller, keyboard, mouse))
             {
@@ -223,6 +226,11 @@ internal sealed class SInputState : InputState
     {
         Vector2 screenPixels = new(mouseState.X * zoomMultiplier, mouseState.Y * zoomMultiplier);
         Vector2 tile = new((int)((Game1.viewport.X + screenPixels.X) / Game1.tileSize), (int)((Game1.viewport.Y + screenPixels.Y) / Game1.tileSize));
+#if SMAPI_FOR_ANDROID
+        if (Game1.player == null)
+            return new CursorPosition(absolutePixels, screenPixels, tile, Vector2.Zero);
+#endif
+
         Vector2 grabTile = (Game1.mouseCursorTransparency > 0 && Utility.tileWithinRadiusOfPlayer((int)tile.X, (int)tile.Y, 1, Game1.player)) // derived from Game1.pressActionButton
             ? tile
             : Game1.player.GetGrabTile();
@@ -256,14 +264,14 @@ internal sealed class SInputState : InputState
                 mouseOverrides[button] = newState;
             else if (button.TryGetKeyboard(out Keys _))
                 keyboardOverrides[button] = newState;
-            else if (button.TryGetController(out Buttons _))
+            else if (controller.IsConnected && button.TryGetController(out Buttons _))
                 controllerOverrides[button] = newState;
         }
 
         // override states
         if (keyboardOverrides.Any())
             keyboard.OverrideButtons(keyboardOverrides);
-        if (controllerOverrides.Any())
+        if (controller.IsConnected && controllerOverrides.Any())
             controller.OverrideButtons(controllerOverrides);
         if (mouseOverrides.Any())
             mouse.OverrideButtons(mouseOverrides);

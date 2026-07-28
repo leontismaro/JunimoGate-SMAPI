@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -20,6 +21,7 @@ using StardewValley;
 using xTile;
 using xTile.Format;
 using xTile.Tiles;
+using static Java.Util.Jar.Attributes;
 
 namespace StardewModdingAPI.Framework.ContentManagers;
 
@@ -29,9 +31,6 @@ internal sealed class ModContentManager : BaseContentManager
     /*********
     ** Fields
     *********/
-    /// <summary>A path segment which navigates to the parent directory.</summary>
-    private const string DirectoryClimbingPathSegment = "..";
-
     /// <summary>Encapsulates SMAPI's JSON file parsing.</summary>
     private readonly JsonHelper JsonHelper;
 
@@ -354,6 +353,38 @@ internal sealed class ModContentManager : BaseContentManager
         return file;
     }
 
+    /// <summary>Premultiply a texture's alpha values to avoid transparency issues in the game.</summary>
+    /// <param name="texture">The texture to premultiply.</param>
+    /// <returns>Returns a premultiplied texture.</returns>
+    /// <remarks>Based on <a href="https://gamedev.stackexchange.com/a/26037">code by David Gouveia</a>.</remarks>
+    private void PremultiplyTransparency(Texture2D texture)
+    {
+        int count = texture.Width * texture.Height;
+        Color[] data = ArrayPool<Color>.Shared.Rent(count);
+        try
+        {
+            texture.GetData(data, 0, count);
+
+            bool changed = false;
+            for (int i = 0; i < count; i++)
+            {
+                ref Color pixel = ref data[i];
+                if (pixel.A is (byte.MinValue or byte.MaxValue))
+                    continue; // no need to change fully transparent/opaque pixels
+
+                data[i] = new Color(pixel.R * pixel.A / byte.MaxValue, pixel.G * pixel.A / byte.MaxValue, pixel.B * pixel.A / byte.MaxValue, pixel.A); // slower version: Color.FromNonPremultiplied(data[i].ToVector4())
+                changed = true;
+            }
+
+            if (changed)
+                texture.SetData(data, 0, count);
+        }
+        finally
+        {
+            ArrayPool<Color>.Shared.Return(data);
+        }
+    }
+
     /// <summary>Fix custom map tilesheet paths so they can be found by the content manager.</summary>
     /// <param name="map">The map whose tilesheets to fix.</param>
     /// <param name="relativeMapPath">The relative map path within the mod folder.</param>
@@ -369,41 +400,28 @@ internal sealed class ModContentManager : BaseContentManager
         this.Monitor.VerboseLog($"Fixing tilesheet paths for map '{relativeMapPath}' from mod '{this.ModName}'...");
         foreach (TileSheet tilesheet in map.TileSheets)
         {
-            // get image path
+            // get image source
             tilesheet.ImageSource = this.NormalizePathSeparators(tilesheet.ImageSource);
             string imageSource = tilesheet.ImageSource;
-            if (fixEagerPathPrefixes && relativeMapFolder.Length > 0 && imageSource?.StartsWith(relativeMapFolder) is true)
-                imageSource = imageSource[(relativeMapFolder.Length + 1)..];
 
-            // ensure path isn't empty
+            // validate image source
             if (string.IsNullOrWhiteSpace(imageSource))
                 throw new SContentLoadException(ContentLoadErrorType.InvalidData, $"{this.ModName} loaded map '{relativeMapPath}' with invalid tilesheet '{tilesheet.Id}'. This tilesheet has no image source.");
 
-            // ensure path is relative
-            if (Path.IsPathRooted(imageSource))
-                throw this.GetPathError(relativeMapFolder, imageSource, $"Tilesheet paths must not be an absolute path ({Path.GetPathRoot(imageSource)}).");
+            // reverse incorrect eager tilesheet path prefixing
+            if (fixEagerPathPrefixes && relativeMapFolder.Length > 0 && imageSource.StartsWith(relativeMapFolder))
+                imageSource = imageSource[(relativeMapFolder.Length + 1)..];
 
-            // ensure any directory climbing is valid
-            // Tilesheet paths are relative to either the `Content/Maps` folder or the map file. Directory climbing is
-            // restricted for safety and simplicity:
-            //   1. Can only climb at the start of the path (e.g. `../LooseSprites/Cursors` but not `Mines/../Barn`).
-            //   2. Can only climb once (to avoid escaping the `Content` folder).
-            //   3. Always relative to the `Content/Maps` folder (not the map file).
-            {
-                const string climbSegment = ModContentManager.DirectoryClimbingPathSegment;
-                string[] pathSegments = PathUtilities.GetSegments(imageSource);
-                if (pathSegments.Contains(climbSegment))
-                {
-                    if (pathSegments[0] != climbSegment || pathSegments.Count(segment => segment == climbSegment) > 1)
-                        throw this.GetPathError(relativeMapFolder, imageSource, $"Directory climbing ({climbSegment}/) is only permitted once at the start of the path.");
-                }
-            }
+            // validate tilesheet path
+            string errorPrefix = $"{this.ModName} loaded map '{relativeMapPath}' with invalid tilesheet path '{imageSource}'.";
+            if (Path.IsPathRooted(imageSource) || PathUtilities.GetSegments(imageSource).Contains(".."))
+                throw new SContentLoadException(ContentLoadErrorType.InvalidData, $"{errorPrefix} Tilesheet paths must be a relative path without directory climbing (../).");
 
             // load best match
             try
             {
                 if (!this.TryGetTilesheetAssetName(relativeMapFolder, imageSource, out IAssetName? assetName, out string? error))
-                    throw this.GetPathError(relativeMapFolder, imageSource, error);
+                    throw new SContentLoadException(ContentLoadErrorType.InvalidData, $"{errorPrefix} {error}");
 
                 if (assetName is not null)
                 {
@@ -418,7 +436,7 @@ internal sealed class ModContentManager : BaseContentManager
                 if (ex is SContentLoadException)
                     throw;
 
-                throw this.GetPathError(relativeMapFolder, imageSource, "The tilesheet couldn't be loaded.", ex);
+                throw new SContentLoadException(ContentLoadErrorType.InvalidData, $"{errorPrefix} The tilesheet couldn't be loaded.", ex);
             }
         }
     }
@@ -427,10 +445,10 @@ internal sealed class ModContentManager : BaseContentManager
     /// <param name="modRelativeMapFolder">The folder path containing the map, relative to the mod folder.</param>
     /// <param name="relativePath">The tilesheet path to load.</param>
     /// <param name="assetName">The found asset name.</param>
-    /// <param name="error">A message indicating why the file couldn't be loaded, if applicable.</param>
+    /// <param name="error">A message indicating why the file couldn't be loaded.</param>
     /// <returns>Returns whether the asset name was found.</returns>
     /// <remarks>See remarks on <see cref="FixTilesheetPaths"/>.</remarks>
-    private bool TryGetTilesheetAssetName(string modRelativeMapFolder, string relativePath, out IAssetName? assetName, [NotNullWhen(false)] out string? error)
+    private bool TryGetTilesheetAssetName(string modRelativeMapFolder, string relativePath, out IAssetName? assetName, out string? error)
     {
         error = null;
 
@@ -450,9 +468,7 @@ internal sealed class ModContentManager : BaseContentManager
                 relativePath = Path.Combine(Path.GetDirectoryName(relativePath) ?? "", filename.TrimStart('.'));
         }
 
-        // get relative to map file unless path has directory climbing
-        const string climbSegment = ModContentManager.DirectoryClimbingPathSegment;
-        if (!relativePath.StartsWith(climbSegment) && PathUtilities.GetSegments(relativePath, 2)[0] != climbSegment) // directory climbing can only be at the start of the path
+        // get relative to map file
         {
             string localKey = Path.Combine(modRelativeMapFolder, relativePath);
             if (this.GetModFile<Texture2D>(localKey).Exists)
@@ -507,17 +523,11 @@ internal sealed class ModContentManager : BaseContentManager
     private string GetContentKeyForTilesheetImageSource(string relativePath)
     {
         string key = relativePath;
+        string topFolder = PathUtilities.GetSegments(key, limit: 2)[0];
 
-        // make path relative to Content folder
-        {
-            string topFolder = PathUtilities.GetSegments(key, limit: 2)[0];
-            const string climbSegment = ModContentManager.DirectoryClimbingPathSegment;
-
-            if (topFolder == climbSegment)
-                key = key[(climbSegment.Length + 1)..];
-            else if (!topFolder.Equals("Maps", StringComparison.OrdinalIgnoreCase))
-                key = Path.Combine("Maps", key);
-        }
+        // convert image source relative to map file into asset key
+        if (!topFolder.Equals("Maps", StringComparison.OrdinalIgnoreCase))
+            key = Path.Combine("Maps", key);
 
         // remove file extension from unpacked file
         if (key.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
@@ -526,13 +536,45 @@ internal sealed class ModContentManager : BaseContentManager
         return key;
     }
 
-    /// <summary>Get an exception indicating that a map asset can't be loaded because one of its tilesheets has an invalid path.</summary>
-    /// <param name="relativeMapPath">The relative path to the folder which contains the map asset, relative to the mod folder.</param>
-    /// <param name="imageSource">The tilesheet's path to the image file.</param>
-    /// <param name="error">The error message indicating why loading it failed. (Basic metadata like the image source is prepended automatically.)</param>
-    /// <param name="ex">The inner exception which caused the error, if applicable.</param>
-    private SContentLoadException GetPathError(string relativeMapPath, string imageSource, string error, Exception? ex = null)
+#if SMAPI_FOR_ANDROID
+    //fix OpenStream can't read asset file any AbsolutePath
+    //original engine it's can load only local assets with only RealativePath
+    protected override Stream OpenStream(string assetName)
     {
-        return new SContentLoadException(ContentLoadErrorType.InvalidData, $"{this.ModName} loaded map '{relativeMapPath}' with invalid tilesheet path '{imageSource}'. {error}", ex);
+        try
+        {
+            //original code
+            //Stream stream = TitleContainer.OpenStream(Path.Combine(RootDirectory, assetName) + ".xnb");
+            //MemoryStream memoryStream = new MemoryStream();
+            //stream.CopyTo(memoryStream);
+            //memoryStream.Seek(0L, SeekOrigin.Begin);
+            //stream.Close();
+            //return memoryStream;
+
+            //patch code
+            assetName = assetName.Replace("//", "/"); //safePath
+            string externalAbsolutePath = Path.Combine(this.RootDirectory, assetName) + ".xnb";
+            using (FileStream stream = new FileStream(externalAbsolutePath, FileMode.Open, FileAccess.Read))
+            {
+                MemoryStream destination = new MemoryStream();
+                stream.CopyTo(destination);
+                destination.Seek(0L, SeekOrigin.Begin);
+                stream.Close();
+                return destination;
+            }
+        }
+        catch (FileNotFoundException innerException)
+        {
+            throw new ContentLoadException("The content file was not found.", innerException);
+        }
+        catch (DirectoryNotFoundException innerException2)
+        {
+            throw new ContentLoadException("The directory was not found.", innerException2);
+        }
+        catch (Exception innerException3)
+        {
+            throw new ContentLoadException("Opening stream error.", innerException3);
+        }
     }
+#endif
 }

@@ -1,8 +1,11 @@
 using System;
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using StardewModdingAPI.Mobile;
 using StardewValley;
 
 namespace StardewModdingAPI.Framework.Content;
@@ -35,6 +38,18 @@ internal class AssetDataForImage : AssetData<Texture2D>, IAssetDataForImage
     {
         if (source == null)
             throw new ArgumentNullException(nameof(source), "Can't patch from null source data.");
+
+#if SMAPI_FOR_ANDROID
+        if (AndroidMainThread.IsOnBackgroundThread)
+        {
+            AndroidMainThread.InvokeOnMainThread(() =>
+            {
+                this.PatchImage(source, sourceArea, targetArea, patchMode);
+            }, null);//don't log
+
+            return;
+        }
+#endif
 
         // get normalized bounds
         this.GetPatchBounds(ref sourceArea, ref targetArea, source.Width, source.Height);
@@ -80,6 +95,16 @@ internal class AssetDataForImage : AssetData<Texture2D>, IAssetDataForImage
         if (source == null)
             throw new ArgumentNullException(nameof(source), "Can't patch from a null source texture.");
 
+#if SMAPI_FOR_ANDROID
+        if (AndroidMainThread.IsOnBackgroundThread)
+        {
+            AndroidMainThread.InvokeOnMainThread(() =>
+            {
+                this.PatchImage(source, sourceArea, targetArea, patchMode);
+            });
+            return;
+        }
+#endif
         // get normalized bounds
         this.GetPatchBounds(ref sourceArea, ref targetArea, source.Width, source.Height);
         if (!source.Bounds.Contains(sourceArea.Value))
@@ -140,6 +165,21 @@ internal class AssetDataForImage : AssetData<Texture2D>, IAssetDataForImage
     /// <exception cref="InvalidOperationException">The content being read isn't an image.</exception>
     private void PatchImageImpl(Color[] sourceData, int sourceWidth, int sourceHeight, Rectangle sourceArea, Rectangle targetArea, PatchMode patchMode, int startRow = 0)
     {
+#if SMAPI_FOR_ANDROID
+        if (AndroidMainThread.IsOnMainThread is false)
+        {
+            Console.WriteLine("Warning!! you are try to patchImage with thread ID: " + Thread.CurrentThread.ManagedThreadId);
+            Console.WriteLine("but your main thread id: " + AndroidMainThread.MainThread.ManagedThreadId);
+            //try invoke on main thread
+            AndroidMainThread.InvokeOnMainThread(() =>
+            {
+                this.PatchImageImpl(sourceData, sourceWidth, sourceHeight, sourceArea, targetArea, patchMode, startRow);
+            }, null);
+
+            return;
+        }
+#endif
+
         // get texture info
         Texture2D target = this.Data;
         int pixelCount = sourceArea.Width * sourceArea.Height;
@@ -205,53 +245,30 @@ internal class AssetDataForImage : AssetData<Texture2D>, IAssetDataForImage
 
             for (int i = startIndex; i <= endIndex; i++)
             {
-                // get source pixel
-                Color above = sourceData[i];
-                if (above.A < AssetDataForImage.MinOpacity)
-                    continue;
-
-                // get target pixel
                 int targetIndex = i - sourceOffset;
+
+                Color above = sourceData[i];
                 Color below = mergedData[targetIndex];
 
-                // apply
-                if (patchMode == PatchMode.Overlay)
-                {
-                    // merge pixels
-                    if (below.A < AssetDataForImage.MinOpacity || above.A == byte.MaxValue)
-                        mergedData[targetIndex] = above;
-                    else
-                    {
-                        // This performs a conventional alpha blend for the pixels, which are already
-                        // premultiplied by the content pipeline. The formula is derived from
-                        // https://blogs.msdn.microsoft.com/shawnhar/2009/11/06/premultiplied-alpha/.
-                        float alphaBelow = 1 - (above.A / 255f);
-                        mergedData[targetIndex] = new Color(
-                            r: (int)(above.R + (below.R * alphaBelow)),
-                            g: (int)(above.G + (below.G * alphaBelow)),
-                            b: (int)(above.B + (below.B * alphaBelow)),
-                            alpha: Math.Max(above.A, below.A)
-                        );
-                    }
-                }
+                // shortcut transparency
+                if (above.A < AssetDataForImage.MinOpacity)
+                    continue;
+                if (below.A < AssetDataForImage.MinOpacity || above.A == byte.MaxValue)
+                    mergedData[targetIndex] = above;
+
+                // merge pixels
                 else
                 {
-                    // subtract mask alpha
-                    int newAlpha = below.A - above.A;
-                    if (newAlpha <= 0)
-                        mergedData[targetIndex] = Color.Transparent;
-                    else
-                    {
-                        // Since the pixels are already premultiplied by the pipeline based on the
-                        // alpha, rescale the RGB channels too to match the new alpha.
-                        float scale = (float)newAlpha / below.A;
-                        mergedData[targetIndex] = new Color(
-                            r: (int)Math.Clamp(Math.Round(below.R * scale), 0, 255),
-                            g: (int)Math.Clamp(Math.Round(below.G * scale), 0, 255),
-                            b: (int)Math.Clamp(Math.Round(below.B * scale), 0, 255),
-                            alpha: newAlpha
-                        );
-                    }
+                    // This performs a conventional alpha blend for the pixels, which are already
+                    // premultiplied by the content pipeline. The formula is derived from
+                    // https://blogs.msdn.microsoft.com/shawnhar/2009/11/06/premultiplied-alpha/.
+                    float alphaBelow = 1 - (above.A / 255f);
+                    mergedData[targetIndex] = new Color(
+                        r: (int)(above.R + (below.R * alphaBelow)),
+                        g: (int)(above.G + (below.G * alphaBelow)),
+                        b: (int)(above.B + (below.B * alphaBelow)),
+                        alpha: Math.Max(above.A, below.A)
+                    );
                 }
             }
 

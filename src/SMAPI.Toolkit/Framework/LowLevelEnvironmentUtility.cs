@@ -1,8 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Reflection;
 #if SMAPI_FOR_WINDOWS
+using System.Management;
 #endif
 using System.Runtime.InteropServices;
 using StardewModdingAPI.Toolkit.Utilities;
@@ -52,8 +54,24 @@ internal static class LowLevelEnvironmentUtility
     /// <param name="platform">The current platform.</param>
     public static string GetFriendlyPlatformName(string platform)
     {
-        string name = Environment.OSVersion.ToString();
+#if SMAPI_FOR_WINDOWS
+        try
+        {
+            string? result = new ManagementObjectSearcher("SELECT Caption FROM Win32_OperatingSystem")
+                .Get()
+                .Cast<ManagementObject>()
+                .Select(entry => entry.GetPropertyValue("Caption").ToString())
+                .FirstOrDefault();
 
+            return result ?? "Windows";
+        }
+        catch
+        {
+            // fallback to default behavior
+        }
+#endif
+
+        string name = Environment.OSVersion.ToString();
         switch (platform)
         {
             case nameof(Platform.Android):
@@ -63,17 +81,7 @@ internal static class LowLevelEnvironmentUtility
             case nameof(Platform.Mac):
                 name = $"macOS {name}";
                 break;
-
-            case nameof(Platform.Windows):
-                // version 10 + 11
-                if (Environment.OSVersion.Platform == PlatformID.Win32NT && Environment.OSVersion.Version is { Major: 10, Minor: 0 } version)
-                {
-                    int mainVersion = version.Build switch { < 22000 => 10, _ => 11 };
-                    name = $"Windows {mainVersion} ({name.Replace("Microsoft Windows NT ", "")})";
-                }
-                break;
         }
-
         return name;
     }
 
@@ -95,6 +103,10 @@ internal static class LowLevelEnvironmentUtility
     /// </remarks>
     private static bool IsRunningAndroid()
     {
+#if SMAPI_FOR_ANDROID
+        return true;
+#endif
+
         using Process process = new()
         {
             StartInfo =
@@ -109,6 +121,7 @@ internal static class LowLevelEnvironmentUtility
 
         try
         {
+            //error here, try catch exception it will not works anymore
             process.Start();
             string output = process.StandardOutput.ReadToEnd();
             return !string.IsNullOrWhiteSpace(output);

@@ -159,7 +159,7 @@ internal static class RewriteHelper
     /// <param name="reference">The type reference.</param>
     public static bool IsSameType(TypeReference type, TypeReference reference)
     {
-        // 
+        //
         // duplicated by IsSameType(Type, TypeReference) above
         //
 

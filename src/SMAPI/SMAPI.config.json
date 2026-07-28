@@ -16,7 +16,7 @@ in future SMAPI versions.
 */
 {
     /**
-     * The mods for which to enable verbose logging, which may show a lot more information to
+     * The logs for which to enable verbose logging, which may show a lot more information to
      * simplify troubleshooting.
      *
      * The possible values are:
@@ -45,11 +45,10 @@ in future SMAPI versions.
     "CheckContentIntegrity": true,
 
     /**
-     * Whether to show much more info in the SMAPI consoler window, intended for mod developers.
-     *
-     * Not recommended for most players.
+     * Whether to enable features intended for mod developers. Currently this only makes TRACE-level
+     * messages appear in the console.
      */
-    "DeveloperMode": false,
+    "DeveloperMode": true,
 
     /**
      * Whether SMAPI should listen for console input. Disabling this will prevent you from using
@@ -58,9 +57,8 @@ in future SMAPI versions.
     "ListenForConsoleInput": true,
 
     /**
-     * Whether SMAPI should rewrite mods for compatibility.
-     *
-     * Disabling this may prevent older mods from loading.
+     * Whether SMAPI should rewrite mods for compatibility. This may prevent older mods from
+     * loading, but bypasses a Visual Studio crash when debugging.
      */
     "RewriteMods": true,
 
@@ -123,44 +121,42 @@ in future SMAPI versions.
     "LogTechnicalDetailsForBrokenMods": false,
 
     /**
-     * The color scheme to apply.
+     * The colors to use for text written to the SMAPI console.
      *
-     * The possible values are:
+     * The possible values for 'UseScheme' are:
      *  - AutoDetect: SMAPI will assume a light background on macOS, and detect the background color
      *    automatically on Linux or Windows.
      *  - LightBackground: use darker text colors that look better on a white or light background.
      *  - DarkBackground: use lighter text colors that look better on a black or dark background.
      *  - None: disables all colors, so everything is written in the default terminal color.
-    */
-    "ConsoleColorScheme": "AutoDetect",
-
-    /**
-     * The colors to use for text written to the SMAPI console.
      *
-     * Only built-scheme IDs can be set here. For available color codes, see
-     * https://docs.microsoft.com/en-us/dotnet/api/system.consolecolor.
+     * For available color codes, see https://docs.microsoft.com/en-us/dotnet/api/system.consolecolor.
      *
      * (These values are synched with ColorfulConsoleWriter.GetDefaultColorSchemeConfig in the
      * SMAPI code.)
      */
-    "ConsoleColorSchemes": {
-        "DarkBackground": {
-            "Trace": "DarkGray",
-            "Debug": "DarkGray",
-            "Info": "White",
-            "Warn": "Yellow",
-            "Error": "Red",
-            "Alert": "Magenta",
-            "Success": "DarkGreen"
-        },
-        "LightBackground": {
-            "Trace": "DarkGray",
-            "Debug": "DarkGray",
-            "Info": "Black",
-            "Warn": "DarkYellow",
-            "Error": "Red",
-            "Alert": "DarkMagenta",
-            "Success": "DarkGreen"
+    "ConsoleColors": {
+        "UseScheme": "AutoDetect",
+
+        "Schemes": {
+            "DarkBackground": {
+                "Trace": "DarkGray",
+                "Debug": "DarkGray",
+                "Info": "White",
+                "Warn": "Yellow",
+                "Error": "Red",
+                "Alert": "Magenta",
+                "Success": "DarkGreen"
+            },
+            "LightBackground": {
+                "Trace": "DarkGray",
+                "Debug": "DarkGray",
+                "Info": "Black",
+                "Warn": "DarkYellow",
+                "Error": "Red",
+                "Alert": "DarkMagenta",
+                "Success": "DarkGreen"
+            }
         }
     },
 

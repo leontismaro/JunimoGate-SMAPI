@@ -1,12 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>StardewModdingAPI.Toolkit.CoreInterfaces</AssemblyName>
     <RootNamespace>StardewModdingAPI</RootNamespace>
-    <Description>Provides toolkit interfaces which are available to SMAPI mods.</Description>
-    <TargetFrameworks>net6.0; netstandard2.0</TargetFrameworks>
+    <Version>4.3.2</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-
-    <PublishTrimmed Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net6.0'))">true</PublishTrimmed>
+    <IsTrimmable>false</IsTrimmable>
+    <ImplicitUsings>disable</ImplicitUsings>
   </PropertyGroup>
-
-  <Import Project="..\..\build\common.targets" />
 </Project>
