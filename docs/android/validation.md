@@ -7,7 +7,10 @@ legitimate game installation. Point JunimoGate builds at that private folder:
 export JUNIMOGATE_GAME_REFERENCE_DIR=/absolute/path/to/analysis/assemblies
 ```
 
-From the JunimoGate superproject, validate a submodule update with:
+The Android runtime depends on JunimoGate's patched Harmony and MonoGame
+packages. Use the JunimoGate bootstrap/toolchain and local NuGet feed for a
+standalone checkout, or validate the pinned submodule from the JunimoGate
+superproject with:
 
 ```bash
 dotnet test JunimoGate.sln
