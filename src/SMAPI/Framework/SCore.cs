@@ -573,7 +573,17 @@ internal class SCore : IDisposable
 
             // load mods
             mods = resolver.ProcessDependencies(mods, modDatabase).ToArray();
+#if SMAPI_FOR_ANDROID
+            ModAssemblyBindingPlan bindingPlan = ModAssemblyBindingPlanner.Build(
+                mods,
+                AndroidHostServices.Options?.AssemblyBindingPolicy ?? ModAssemblyBindingPolicy.HighestCompatible,
+                this.Monitor);
+            foreach ((IModMetadata mod, string error) in bindingPlan.Failures)
+                mod.SetStatus(ModMetadataStatus.Failed, ModFailReason.Incompatible, error);
+            this.LoadMods(mods, this.Toolkit.JsonHelper, this.ContentCore, modDatabase, bindingPlan);
+#else
             this.LoadMods(mods, this.Toolkit.JsonHelper, this.ContentCore, modDatabase);
+#endif
 
 #if !SMAPI_FOR_ANDROID
             // check for software likely to cause issues
@@ -2186,13 +2196,13 @@ internal class SCore : IDisposable
     /// <param name="jsonHelper">The JSON helper with which to read mods' JSON files.</param>
     /// <param name="contentCore">The content manager to use for mod content.</param>
     /// <param name="modDatabase">Handles access to SMAPI's internal mod metadata list.</param>
-    private void LoadMods(IModMetadata[] mods, JsonHelper jsonHelper, ContentCoordinator contentCore, ModDatabase modDatabase)
+    private void LoadMods(IModMetadata[] mods, JsonHelper jsonHelper, ContentCoordinator contentCore, ModDatabase modDatabase, ModAssemblyBindingPlan? bindingPlan = null)
     {
         this.Monitor.Log("Loading mods...", LogLevel.Debug);
 
         // load mods
         IList<IModMetadata> skippedMods = new List<IModMetadata>();
-        using (AssemblyLoader modAssemblyLoader = new(Constants.Platform, this.Monitor, this.Settings.ParanoidWarnings, this.Settings.RewriteMods, this.Settings.LogTechnicalDetailsForBrokenMods))
+        using (AssemblyLoader modAssemblyLoader = new(Constants.Platform, this.Monitor, this.Settings.ParanoidWarnings, this.Settings.RewriteMods, this.Settings.LogTechnicalDetailsForBrokenMods, bindingPlan))
         {
             this.Monitor.Log($"Resolved {mods.Length} mod manifest(s).", LogLevel.Debug);
 

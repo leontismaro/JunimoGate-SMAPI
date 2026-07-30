@@ -53,6 +53,9 @@ internal class AssemblyLoader : IDisposable
     /// <summary>Whether to include more technical details about broken mods in the TRACE logs. This is mainly useful for creating compatibility rewriters.</summary>
     private readonly bool LogTechnicalDetailsForBrokenMods;
 
+    /// <summary>The JunimoGate binding plan for local Mod dependencies.</summary>
+    private readonly ModAssemblyBindingPlan? BindingPlan;
+
 
     /*********
     ** Public methods
@@ -63,11 +66,12 @@ internal class AssemblyLoader : IDisposable
     /// <param name="paranoidMode">Whether to detect paranoid mode issues.</param>
     /// <param name="rewriteMods">Whether to rewrite mods for compatibility.</param>
     /// <param name="logTechnicalDetailsForBrokenMods">Whether to include more technical details about broken mods in the TRACE logs. This is mainly useful for creating compatibility rewriters.</param>
-    public AssemblyLoader(Platform targetPlatform, IMonitor monitor, bool paranoidMode, bool rewriteMods, bool logTechnicalDetailsForBrokenMods)
+    public AssemblyLoader(Platform targetPlatform, IMonitor monitor, bool paranoidMode, bool rewriteMods, bool logTechnicalDetailsForBrokenMods, ModAssemblyBindingPlan? bindingPlan = null)
     {
         this.Monitor = monitor;
         this.RewriteMods = rewriteMods;
         this.LogTechnicalDetailsForBrokenMods = logTechnicalDetailsForBrokenMods;
+        this.BindingPlan = bindingPlan;
         this.AssemblyMap = this.TrackForDisposal(Constants.GetAssemblyMap(targetPlatform));
 
         // init resolver
@@ -323,7 +327,11 @@ internal class AssemblyLoader : IDisposable
         // yield referenced assemblies
         foreach (AssemblyNameReference dependency in assembly.MainModule.AssemblyReferences)
         {
-            FileInfo dependencyFile = new(Path.Combine(file.Directory.FullName, $"{dependency.Name}.dll"));
+            if (visitedAssemblyNames.Contains(dependency.Name))
+                continue;
+            FileInfo dependencyFile = this.BindingPlan?.TryResolve(dependency.Name, out string? selectedPath) == true
+                ? new FileInfo(selectedPath)
+                : new FileInfo(Path.Combine(file.Directory.FullName, $"{dependency.Name}.dll"));
             foreach (AssemblyParseResult result in this.GetReferencedLocalAssemblies(dependencyFile, visitedAssemblyNames, assemblyResolver))
                 yield return result;
         }

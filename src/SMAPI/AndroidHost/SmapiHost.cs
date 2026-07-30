@@ -22,6 +22,13 @@ public interface IManagedAssemblyLoader
     Assembly LoadRewritten(string sourcePath, ReadOnlyMemory<byte> assemblyBytes, ReadOnlyMemory<byte>? symbols);
 }
 
+public enum ModAssemblyBindingPolicy
+{
+    Strict,
+    FirstLoaded,
+    HighestCompatible,
+}
+
 public sealed record SmapiRuntimeOptions
 {
     public required Activity Activity { get; init; }
@@ -35,6 +42,7 @@ public sealed record SmapiRuntimeOptions
     public required string BackupDirectory { get; init; }
     public required IMainThreadDispatcher MainThread { get; init; }
     public required IManagedAssemblyLoader AssemblyLoader { get; init; }
+    public required ModAssemblyBindingPolicy AssemblyBindingPolicy { get; init; }
     public required Action<View> AttachGameView { get; init; }
     public required Action ReportModLoadingReady { get; init; }
     public required Action<SmapiFailure> ReportFailure { get; init; }
