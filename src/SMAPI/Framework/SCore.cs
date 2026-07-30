@@ -317,6 +317,9 @@ internal class SCore : IDisposable
         catch (Exception ex)
         {
             this.Monitor.Log($"SMAPI failed to initialize: {ex.GetLogSummary()}", LogLevel.Error);
+#if SMAPI_FOR_ANDROID
+            AndroidHostServices.Options?.ReportFailure(new SmapiFailure("smapi_initialization_failed", ex.Message, ex));
+#endif
             this.LogManager.PressAnyKeyToExit();
             return;
         }
@@ -578,14 +581,16 @@ internal class SCore : IDisposable
 
             // check for updates
             _ = this.CheckForUpdatesAsync(mods); // ignore task since the main thread doesn't need to wait for it
-#else
-
-            AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.LoadedAndNeedToConfirm;
 #endif
 
             // register config menu with Generic Mod Config Menu
             if (this.Settings.EnableConfigMenu)
                 new GenericModConfigMenuIntegration(this.Monitor, this.Translator, () => this.Settings, this.ReloadSettings).Register(this.ModRegistry);
+
+#if SMAPI_FOR_ANDROID
+            AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.LoadedAndNeedToConfirm;
+            AndroidHostServices.Options?.ReportModLoadingReady();
+#endif
         }
 
 #if SMAPI_FOR_ANDROID

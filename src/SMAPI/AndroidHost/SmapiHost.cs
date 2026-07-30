@@ -36,6 +36,7 @@ public sealed record SmapiRuntimeOptions
     public required IMainThreadDispatcher MainThread { get; init; }
     public required IManagedAssemblyLoader AssemblyLoader { get; init; }
     public required Action<View> AttachGameView { get; init; }
+    public required Action ReportModLoadingReady { get; init; }
     public required Action<SmapiFailure> ReportFailure { get; init; }
 }
 
