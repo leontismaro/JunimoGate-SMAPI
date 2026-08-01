@@ -117,6 +117,7 @@ internal class MapMethodToStaticMethodRewriter : BaseInstructionHandler
             Console.WriteLine("Error not found new method in type: " + newType);
             return this;
         }
+        ValidateReplacementMethod(newMethod);
 
         var mapMethod = new MapMethodToStaticKeyValue(srcMethod, newMethod);
 
@@ -196,8 +197,18 @@ internal class MapMethodToStaticMethodRewriter : BaseInstructionHandler
     public MapMethodToStaticMethodRewriter AddWithMethodFullName(
         string originalMethodFullName, MethodInfo newMethodToReplace)
     {
-
+        ValidateReplacementMethod(newMethodToReplace);
         this.MapMethodWithFullName[originalMethodFullName] = newMethodToReplace;
         return this;
+    }
+
+    private static void ValidateReplacementMethod(MethodInfo method)
+    {
+        if (!method.IsPublic || method.DeclaringType?.IsVisible != true)
+        {
+            throw new InvalidOperationException(
+                $"Replacement method '{method.DeclaringType?.FullName}.{method.Name}' must be publicly callable from rewritten Mod assemblies."
+            );
+        }
     }
 }

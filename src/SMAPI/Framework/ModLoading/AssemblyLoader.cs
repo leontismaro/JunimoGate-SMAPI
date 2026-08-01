@@ -85,7 +85,7 @@ internal class AssemblyLoader : IDisposable
             ModuleDefinition module = this.AssemblyMap.TargetModules[assembly];
             foreach (TypeDefinition type in module.GetTypes())
             {
-                if (!type.IsPublic)
+                if (!TypeDefinitionVisibility.IsPubliclyVisible(type))
                     continue; // no need to rewrite
                 if (type.Namespace.Contains("<"))
                     continue; // ignore assembly metadata
@@ -381,18 +381,8 @@ internal class AssemblyLoader : IDisposable
                 foreach (TypeReference type in typeReferences)
                     this.ChangeTypeScope(type);
 
-                // rewrite types using custom attributes
-                foreach (TypeDefinition type in module.GetTypes())
-                {
-                    foreach (CustomAttribute attr in type.CustomAttributes)
-                    {
-                        foreach (CustomAttributeArgument conField in attr.ConstructorArguments)
-                        {
-                            if (conField.Value is TypeReference typeRef)
-                                this.ChangeTypeScope(typeRef);
-                        }
-                    }
-                }
+                // rewrite type scopes embedded in custom attributes, including Type[] arguments
+                CustomAttributeTypeScopeRewriter.Rewrite(module, this.ChangeTypeScope);
             }
         }
 

@@ -11,13 +11,13 @@ using StardewValley.Menus;
 namespace StardewModdingAPI.Mobile.Facade;
 
 [HarmonyPatch]
-internal static class LetterViewerMenuRewriter
+public static class LetterViewerMenuRewriter
 {
     public const string OnPageChange_FullName
         = "System.Void StardewValley.Menus.LetterViewerMenu::OnPageChange()";
     public static MethodInfo OnPageChangeProxy_MethodInfo
         = AccessTools.Method(typeof(LetterViewerMenuRewriter), nameof(OnPageChange_Proxy));
-    static void OnPageChange_Proxy(this LetterViewerMenu menu)
+    public static void OnPageChange_Proxy(this LetterViewerMenu menu)
     {
     }
 

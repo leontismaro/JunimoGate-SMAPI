@@ -28,7 +28,7 @@ internal static class KeyboardInputRewriter
     }
 }
 
-internal static class KeyEventHandlerRewriter
+public static class KeyEventHandlerRewriter
 {
     public static void Ctor(object sender, int ptr)
     {

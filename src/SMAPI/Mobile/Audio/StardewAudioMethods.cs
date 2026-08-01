@@ -82,7 +82,7 @@ public static class StardewAudioMethods
 
     public readonly static MethodInfo ISoundBank_AddCue_MethodInfo
         = AccessTools.Method(typeof(StardewAudioMethods), nameof(ISoundBank_AddCue));
-    static void ISoundBank_AddCue(this ISoundBank obj, CueDefinition cue)
+    public static void ISoundBank_AddCue(this ISoundBank obj, CueDefinition cue)
     {
         switch (obj)
         {
@@ -103,7 +103,7 @@ public static class StardewAudioMethods
         = "System.Boolean StardewValley.ISoundBank::Exists(System.String)";
     public static readonly MethodInfo ISoundBank_Exists_MethodInfo
         = AccessTools.Method(typeof(StardewAudioMethods), nameof(ISoundBank_Exists));
-    static bool ISoundBank_Exists(this ISoundBank thisObject, string name)
+    public static bool ISoundBank_Exists(this ISoundBank thisObject, string name)
     {
         switch (thisObject)
         {
@@ -131,7 +131,7 @@ public static class StardewAudioMethods
     static readonly Dictionary<ICue, float> holder_Volume = new();
     internal const string get_Volume_FullName = "System.Single StardewValley.ICue::get_Volume()";
     internal readonly static MethodInfo ICue_get_Volume_MethodInfo = AccessTools.Method(typeof(StardewAudioMethods), nameof(ICue_get_Volume));
-    internal static float ICue_get_Volume(this ICue icue)
+    public static float ICue_get_Volume(this ICue icue)
     {
         switch (icue)
         {
@@ -153,7 +153,7 @@ public static class StardewAudioMethods
 
     internal const string set_Volume_FullName = "System.Void StardewValley.ICue::set_Volume(System.Single)";
     internal readonly static MethodInfo ICue_set_Volume_MethodInfo = AccessTools.Method(typeof(StardewAudioMethods), nameof(ICue_set_Volume));
-    internal static void ICue_set_Volume(this ICue icue, float newValue)
+    public static void ICue_set_Volume(this ICue icue, float newValue)
     {
         switch (icue)
         {
@@ -173,7 +173,7 @@ public static class StardewAudioMethods
     internal const string get_Pitch_FullName = "System.Single StardewValley.ICue::get_Pitch()";
     internal readonly static MethodInfo Get_Pitch_ProxyMethodInfo = AccessTools.Method(typeof(StardewAudioMethods), nameof(Get_Pitch_Proxy));
     readonly static Dictionary<ICue, float> holder_Pitch = new();
-    internal static float Get_Pitch_Proxy(this ICue icue)
+    public static float Get_Pitch_Proxy(this ICue icue)
     {
         switch (icue)
         {
@@ -201,7 +201,7 @@ public static class StardewAudioMethods
 
     internal const string set_Pitch_FullName = "System.Void StardewValley.ICue::set_Pitch(System.Single)";
     internal readonly static MethodInfo Set_Pitch_ProxyMethodInfo = AccessTools.Method(typeof(StardewAudioMethods), nameof(Set_Pitch_Proxy));
-    internal static void Set_Pitch_Proxy(this ICue icue, float newValue)
+    public static void Set_Pitch_Proxy(this ICue icue, float newValue)
     {
         switch (icue)
         {
@@ -222,7 +222,7 @@ public static class StardewAudioMethods
         = "System.Boolean StardewValley.ICue::get_IsPitchBeingControlledByRPC()";
     internal readonly static MethodInfo Get_IsPitchBeingControlledByRPC_MethodInfo
         = AccessTools.Method(typeof(StardewAudioMethods), nameof(Get_IsPitchBeingControlledByRPC_Proxy));
-    static bool Get_IsPitchBeingControlledByRPC_Proxy(this ICue icue)
+    public static bool Get_IsPitchBeingControlledByRPC_Proxy(this ICue icue)
     {
         //TODO
         return false;

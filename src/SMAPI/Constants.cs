@@ -328,7 +328,11 @@ public static class Constants
         string gameAssembliesPath = Path.Combine(Constants.GamePath, "assemblies");
         resolver.TryAddSearchDirectory(gameAssembliesPath);
         if (AndroidHost.AndroidHostServices.ManagedAssemblyDirectory is { } managedAssemblyDirectory)
+        {
             resolver.TryAddSearchDirectory(managedAssemblyDirectory);
+            foreach (string path in Directory.EnumerateFiles(managedAssemblyDirectory, "*.dll", SearchOption.TopDirectoryOnly))
+                resolver.Add(AssemblyDefinition.ReadAssembly(path));
+        }
 
         string svDllPath = typeof(Game1).Assembly.Location;
         if (!File.Exists(svDllPath))
@@ -336,11 +340,6 @@ public static class Constants
         var svAsmLoaded = AssemblyDefinition.ReadAssembly(svDllPath);
         resolver.AddWithExplicitNames(svAsmLoaded, ["StardewValley", "Stardew Valley"]);
 
-        string? smapiPath = AndroidHost.AndroidHostServices.ManagedAssemblyDirectory is { } managed
-            ? Path.Combine(managed, "StardewModdingAPI.dll")
-            : null;
-        if (smapiPath is not null && File.Exists(smapiPath))
-            resolver.Add(AssemblyDefinition.ReadAssembly(smapiPath));
         return;
 #else
         // add search paths
@@ -389,8 +388,8 @@ public static class Constants
             "Netcode"
         );
 
-        // Stardew Valley reference
-        removeAssemblyReferences.Add("StardewValley");
+        // Stardew Valley reference (the simple name differs between desktop and Android builds)
+        removeAssemblyReferences.AddRange(["Stardew Valley", "StardewValley"]);
         targetAssemblies.Add(typeof(StardewValley.Game1).Assembly);
 
         return new PlatformAssemblyMap(targetPlatform, removeAssemblyReferences.ToArray(), targetAssemblies.ToArray());
