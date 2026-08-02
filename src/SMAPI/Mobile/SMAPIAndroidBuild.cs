@@ -3,5 +3,5 @@ namespace StardewModdingAPI.Mobile;
 
 public static class SMAPIAndroidBuild
 {
-    public const string BuildCode = "junimogate-4.5.2.28-04e59218";
+    public const string BuildCode = "junimogate-4.5.2.29-c2e38a69";
 }
