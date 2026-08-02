@@ -18,7 +18,7 @@ internal static class UnlockableBundlesModFix
     const string asmFileName = "Unlockable Bundles.dll";
     public static void Init(AndroidModFixManager modFix)
     {
-        monitor = modFix.monitor;
+        monitor = modFix.Monitor;
         modFix.RegisterOnModLoaded(asmFileName, OnModLoaded);
         modFix.RegisterOnPostModEntry(asmFileName, OnPostModEntry);
     }

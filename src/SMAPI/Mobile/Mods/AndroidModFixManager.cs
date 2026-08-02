@@ -1,141 +1,185 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
+using Mono.Cecil;
 using StardewModdingAPI.Framework;
 using StardewModdingAPI.Internal;
 
 namespace StardewModdingAPI.Mobile;
-internal class AndroidModFixManager
-{
-    class OnModLoadedCallbackList
-    {
-        List<Action<Assembly>> callbackList = new();
-        public void InvokeAll(Assembly asm)
-        {
-            foreach (var callback in this.callbackList)
-            {
-                callback.Invoke(asm);
-            }
-        }
 
-        internal void AddCallback(Action<Assembly> callback)
-        {
-            this.callbackList.Add(callback);
-        }
-    }
-    Dictionary<string, OnModLoadedCallbackList> OnModLoadedRegistry = new();
-    public static AndroidModFixManager Instance { get; private set; }
-    public IMonitor monitor;
-    AndroidModFixManager()
+internal sealed class AndroidModFixManager
+{
+    private sealed class CompatibilityCallbacks
     {
-        Instance = this;
-        this.monitor = SCore.Instance.SMAPIMonitor;
+        public List<Action<Assembly>> AssemblyLoaded { get; } = [];
+        public List<Action<AssemblyDefinition>> RewriteAssembly { get; } = [];
+        public List<Action<IMod>> AfterModEntry { get; } = [];
     }
+
+    private static readonly object InstanceLock = new();
+    private static AndroidModFixManager? instance;
+
+    private readonly object registryLock = new();
+    private readonly Dictionary<string, CompatibilityCallbacks> registry = new(StringComparer.OrdinalIgnoreCase);
+
+    private AndroidModFixManager(IMonitor monitor)
+    {
+        Monitor = monitor;
+    }
+
+    public static AndroidModFixManager Instance => instance
+        ?? throw new InvalidOperationException("Android Mod compatibility has not been initialized.");
+
+    public IMonitor Monitor { get; }
 
     public static AndroidModFixManager Init()
     {
-        Instance = new();
-        AppDomain.CurrentDomain.AssemblyLoad += CurrentDomain_AssemblyLoad;
-
-        return Instance;
-    }
-
-    static void CurrentDomain_AssemblyLoad(object? sender, AssemblyLoadEventArgs args)
-    {
-        Instance.OnAsmLoad(args.LoadedAssembly);
-    }
-    public static Action<Assembly> OnModLoaded;
-    private void OnAsmLoad(Assembly asm)
-    {
-        OnModLoaded?.Invoke(asm);
-
-        string name = asm.GetName().Name;
-        string dllFileName = name + ".dll";
-        if (this.OnModLoadedRegistry.TryGetValue(dllFileName, out var cbList))
+        var manager = new AndroidModFixManager(SCore.Instance.SMAPIMonitor);
+        lock (InstanceLock)
         {
-            try
-            {
-                cbList.InvokeAll(asm);
-            }
-            catch (Exception ex)
-            {
-                var monitor = SCore.Instance.SMAPIMonitor;
-                monitor.Log(ex.ToString(), LogLevel.Error);
-            }
+            if (instance is not null)
+                AppDomain.CurrentDomain.AssemblyLoad -= instance.OnAssemblyLoaded;
+
+            instance = manager;
+            AppDomain.CurrentDomain.AssemblyLoad += manager.OnAssemblyLoaded;
         }
+
+        return manager;
     }
 
-    public void RegisterOnModLoaded(string asmDllFileName, Action<Assembly> callback)
+    public void RegisterOnModLoaded(string assemblyName, Action<Assembly> callback)
     {
-        //create new item
-        if (this.OnModLoadedRegistry.TryGetValue(asmDllFileName, out var cbList) is false)
-        {
-            cbList = new();
-            this.OnModLoadedRegistry.Add(asmDllFileName, cbList);
-        }
-        //added
-        cbList.AddCallback(callback);
-
+        ArgumentNullException.ThrowIfNull(callback);
+        lock (registryLock)
+            GetOrCreate(assemblyName).AssemblyLoaded.Add(callback);
     }
 
-    //key: AssemblyName, value: callback
-    Dictionary<string, Action<Mono.Cecil.AssemblyDefinition>> OnRewriteModDictionary = new();
-    internal void RegisterRewriteModAssemblyDef(string v, Action<Mono.Cecil.AssemblyDefinition> callback)
+    internal void RegisterRewriteModAssemblyDef(string assemblyName, Action<AssemblyDefinition> callback)
     {
-        this.OnRewriteModDictionary.TryAdd(v, callback);
+        ArgumentNullException.ThrowIfNull(callback);
+        lock (registryLock)
+            GetOrCreate(assemblyName).RewriteAssembly.Add(callback);
     }
 
-    internal void TryRewriteMod(Framework.ModLoading.AssemblyParseResult assembly, out bool hasRewrite, out Exception exception)
+    internal void RegisterOnPostModEntry(string assemblyName, Action<IMod> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        lock (registryLock)
+            GetOrCreate(assemblyName).AfterModEntry.Add(callback);
+    }
+
+    internal void TryRewriteMod(
+        Framework.ModLoading.AssemblyParseResult assembly,
+        out bool hasRewrite,
+        out Exception? exception)
     {
         string assemblyName = assembly.Definition.Name.Name;
+        Action<AssemblyDefinition>[] callbacks;
+        lock (registryLock)
+        {
+            if (!registry.TryGetValue(NormalizeAssemblyName(assemblyName), out var registration) ||
+                registration.RewriteAssembly.Count == 0)
+            {
+                hasRewrite = false;
+                exception = null;
+                return;
+            }
+
+            callbacks = registration.RewriteAssembly.ToArray();
+            registration.RewriteAssembly.Clear();
+        }
+
         hasRewrite = false;
         exception = null;
-
-        if (this.OnRewriteModDictionary.TryGetValue(assemblyName, out var callback))
+        foreach (var callback in callbacks)
         {
-            var monitor = SCore.Instance.SMAPIMonitor;
-            this.OnRewriteModDictionary.Remove(assemblyName);
-
-            monitor.Log("Try ModFixManager rewrite mod: " + assembly.Definition.Name);
+            Monitor.Log("Try ModFixManager rewrite mod: " + assembly.Definition.Name);
             try
             {
-                callback.Invoke(assembly.Definition);
+                callback(assembly.Definition);
                 hasRewrite = true;
-                monitor.Log("Done rewrite mod: " + assembly.Definition.Name);
+                Monitor.Log("Done rewrite mod: " + assembly.Definition.Name);
             }
             catch (Exception ex)
             {
-                monitor.Log(ex.ToString(), LogLevel.Error);
+                Monitor.Log(ex.ToString(), LogLevel.Error);
                 exception = ex;
+                return;
             }
         }
-    }
-
-    internal delegate void OnPostfixModEntryDelegate(IMod mod);
-    static Dictionary<string, OnPostfixModEntryDelegate> EventOnPostfixModEntry = new();
-    internal void RegisterOnPostModEntry(string asmFileName, OnPostfixModEntryDelegate onPostModEntry)
-    {
-        EventOnPostfixModEntry[asmFileName] = onPostModEntry;
     }
 
     internal void OnPostfixModEntry(IMod mod)
     {
-        try
+        string? assemblyName = mod.GetType().Assembly.GetName().Name;
+        if (assemblyName is null)
+            return;
+
+        foreach (var callback in GetCallbacks(assemblyName, static registration => registration.AfterModEntry))
         {
-            string asmFileName = new AssemblyName(mod.GetType().Assembly.FullName).Name + ".dll";
-            if (EventOnPostfixModEntry.TryGetValue(asmFileName, out var callback))
+            try
             {
                 callback(mod);
             }
+            catch (Exception ex)
+            {
+                Monitor.Log(ex.GetLogSummary(), LogLevel.Error);
+            }
         }
-        catch (Exception ex)
+    }
+
+    private void OnAssemblyLoaded(object? sender, AssemblyLoadEventArgs args)
+    {
+        string? assemblyName = args.LoadedAssembly.GetName().Name;
+        if (assemblyName is null)
+            return;
+
+        foreach (var callback in GetCallbacks(assemblyName, static registration => registration.AssemblyLoaded))
         {
-            var monitor = SCore.Instance.SMAPIMonitor;
-            monitor.Log(ex.GetLogSummary(), LogLevel.Error);
+            try
+            {
+                callback(args.LoadedAssembly);
+            }
+            catch (Exception ex)
+            {
+                Monitor.Log(ex.ToString(), LogLevel.Error);
+            }
         }
+    }
+
+    private Action<T>[] GetCallbacks<T>(
+        string assemblyName,
+        Func<CompatibilityCallbacks, List<Action<T>>> select)
+    {
+        lock (registryLock)
+        {
+            return registry.TryGetValue(NormalizeAssemblyName(assemblyName), out var registration)
+                ? select(registration).ToArray()
+                : [];
+        }
+    }
+
+    private CompatibilityCallbacks GetOrCreate(string assemblyName)
+    {
+        string key = NormalizeAssemblyName(assemblyName);
+        if (!registry.TryGetValue(key, out var registration))
+        {
+            registration = new CompatibilityCallbacks();
+            registry.Add(key, registration);
+        }
+
+        return registration;
+    }
+
+    private static string NormalizeAssemblyName(string assemblyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(assemblyName);
+        string name = Path.GetFileName(assemblyName.Trim());
+        if (name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            name = name[..^4];
+        if (name.Length == 0)
+            throw new ArgumentException("The assembly name is empty.", nameof(assemblyName));
+        return name;
     }
 }

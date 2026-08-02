@@ -36,15 +36,7 @@ internal static class AndroidRuntimeBootstrap
     {
         new SaveBackupZip().Start();
 
-        var modFix = AndroidModFixManager.Init();
-        FarmTypeManagerFix.Init(modFix);
-        SpaceCoreFix.Init(modFix);
-        SveFix.Init(modFix);
-        GenericConfigMenuModFix.Init(modFix);
-        UnlockableBundlesModFix.Init(modFix);
-        FashionSenseModFix.Init(modFix);
-        DisableSaveBackup.Init(modFix);
-        ModQuickSaveOptionPage.Init(modFix);
+        AndroidModCompatibilityRegistry.Initialize();
 
         AndroidPatcher.Apply(Harmony, SCore.Instance.SMAPIMonitor);
     }
