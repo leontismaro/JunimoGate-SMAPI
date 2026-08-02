@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
@@ -19,24 +19,12 @@ internal static class AndroidModLoaderManager
         LoadedAndNeedToConfirm = 2,
         LoadedConfirm = 3,
     }
-    static object _lock = new();
-    static LoadStatus _loadStatus = LoadStatus.None;
+    private static int loadStatus = (int)LoadStatus.None;
+    private static readonly AndroidMainThreadTaskQueue ModEntryTasks = new();
     public static LoadStatus CurrentStatus
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _loadStatus;
-            }
-        }
-        set
-        {
-            lock (_lock)
-            {
-                _loadStatus = value;
-            }
-        }
+        get => (LoadStatus)Volatile.Read(ref loadStatus);
+        set => Volatile.Write(ref loadStatus, (int)value);
     }
 
 
@@ -48,41 +36,23 @@ internal static class AndroidModLoaderManager
     internal static void TickUpdate()
     {
         //wait thread mod loader
-        Task? taskModEntry;
-        lock (_lock_queueTaskStartModEntry)
+        try
         {
-            queueTaskStartModEntry.TryDequeue(out taskModEntry);
+            ModEntryTasks.TryRunNext();
         }
-        if (taskModEntry != null)
+        catch (Exception ex)
         {
-            try
-            {
-                //Console.WriteLine($"taskModEntry.RunSynchronously(); ID: {taskModEntry.Id} on Main Thread");
-                taskModEntry.RunSynchronously();
-                //Console.WriteLine("End taskModEntry.RunSynchronously() in main thread");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("exception on task: " + ex);
-            }
+            Console.WriteLine("exception on task: " + ex);
         }
     }
-    static Queue<Task> queueTaskStartModEntry = new();
-    static object _lock_queueTaskStartModEntry = new();
     internal static void TryStartModEntry(IMod mod)
     {
         //main thread safe
-        Task taskModEntry = new Task(() =>
+        Task taskModEntry = ModEntryTasks.Enqueue(() =>
         {
             mod.Entry(mod.Helper);
             AndroidModFixManager.Instance.OnPostfixModEntry(mod);
         });
-
-        lock (_lock_queueTaskStartModEntry)
-        {
-            queueTaskStartModEntry.Enqueue(taskModEntry);
-            //Console.WriteLine("enqueue task mod loading.");
-        }
 
         // log
         //Console.WriteLine("task id: " + taskModEntry.Id + ", mod name: " + mod.GetType());
