@@ -27,7 +27,7 @@ internal static class SveFix
 
     static void OnModLoaded(Assembly asm)
     {
-        var harmony = AndroidPatcher.harmony;
+        var harmony = AndroidRuntimeBootstrap.Harmony;
         TMXLLoadMapFacingDirection = asm.GetType("StardewValleyExpanded.HarmonyPatch_TMXLLoadMapFacingDirection");
         harmony.Patch(
             original: AccessTools.Method(TMXLLoadMapFacingDirection, "ApplyPatch"),

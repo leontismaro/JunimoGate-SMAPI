@@ -58,7 +58,7 @@ internal static partial class SpaceCoreFix
         monitor.Log("Start SpaceCoreFix");
         try
         {
-            var harmony = AndroidPatcher.harmony;
+            var harmony = AndroidRuntimeBootstrap.Harmony;
             var SpaceCoreModEntry = modAssembly.GetType("SpaceCore.SpaceCore");
             harmony.Patch(
                 original: AccessTools.Method(SpaceCoreModEntry, "GatherLocals"),

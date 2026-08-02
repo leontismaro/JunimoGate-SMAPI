@@ -36,7 +36,7 @@ static class DisableSaveBackup
         {
             monitor.Log("Start DisableQuickSave Fix..");
 
-            var harmony = AndroidPatcher.harmony;
+            var harmony = AndroidRuntimeBootstrap.Harmony;
 
             var OptionPageCtor = AccessTools.Constructor(OptionsPageType, [
                 typeof(int),

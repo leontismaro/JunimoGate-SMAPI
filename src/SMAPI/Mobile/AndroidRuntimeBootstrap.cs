@@ -1,0 +1,51 @@
+using System;
+using HarmonyLib;
+using StardewModdingAPI.Framework;
+using StardewModdingAPI.Internal;
+using StardewModdingAPI.Mobile.Mods;
+
+namespace StardewModdingAPI.Mobile;
+
+internal static class AndroidRuntimeBootstrap
+{
+    private static Harmony? harmony;
+
+    internal static Harmony Harmony => harmony
+        ?? throw new InvalidOperationException("Android runtime bootstrap has not completed.");
+
+    public static void InitializeProcess()
+    {
+        AndroidLogger.Log("===========================");
+        AndroidLogger.Log("===========================");
+        AndroidLogger.Log("On AndroidRuntimeBootstrap.InitializeProcess()");
+
+        try
+        {
+            Log.enabled = true;
+            harmony = new Harmony(nameof(AndroidPatcher));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Error on AndroidRuntimeBootstrap.InitializeProcess()");
+            AndroidLogger.Log(ex);
+            throw;
+        }
+    }
+
+    public static void PrepareSession()
+    {
+        new SaveBackupZip().Start();
+
+        var modFix = AndroidModFixManager.Init();
+        FarmTypeManagerFix.Init(modFix);
+        SpaceCoreFix.Init(modFix);
+        SveFix.Init(modFix);
+        GenericConfigMenuModFix.Init(modFix);
+        UnlockableBundlesModFix.Init(modFix);
+        FashionSenseModFix.Init(modFix);
+        DisableSaveBackup.Init(modFix);
+        ModQuickSaveOptionPage.Init(modFix);
+
+        AndroidPatcher.Apply(Harmony, SCore.Instance.SMAPIMonitor);
+    }
+}

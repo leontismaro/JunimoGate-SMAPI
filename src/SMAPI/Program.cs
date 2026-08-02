@@ -36,7 +36,7 @@ internal class Program
     public static void Main(string[] args)
     {
 #if SMAPI_FOR_ANDROID
-        AndroidPatcher.Setup();
+        AndroidRuntimeBootstrap.InitializeProcess();
         AndroidMainThread.Init(args);
 #endif
         Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture; // per StardewValley.Program.Main
@@ -257,8 +257,7 @@ internal class Program
         writeToConsole = false;
         modsPath = AndroidHostServices.Options?.ModsDirectory ?? Path.Combine(EarlyConstants.ExternalFilesDir, "Mods");
         SCore core = new(modsPath, writeToConsole, developerMode);
-        //before run game you should apply Harmony Patch
-        AndroidPatcher.OnBeforeSCoreRun();
+        AndroidRuntimeBootstrap.PrepareSession();
         core.RunInteractively();
 #endif
     }

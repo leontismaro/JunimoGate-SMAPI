@@ -23,7 +23,7 @@ internal static class GenericConfigMenuModFix
     {
         monitor.Log("Start GenericModConfigFix");
 
-        var hp = AndroidPatcher.harmony;
+        var hp = AndroidRuntimeBootstrap.Harmony;
         var modEntry = asm.GetType("GenericModConfigMenu.Mod");
         ModEntry_OnRendered_MethodInfo = AccessTools.Method(modEntry, "OnRendered");
         hp.Patch(

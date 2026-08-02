@@ -107,10 +107,10 @@ public sealed class SmapiSession : IDisposable
         try
         {
             AndroidHostServices.Configure(options);
-            Mobile.AndroidPatcher.Setup();
+            Mobile.AndroidRuntimeBootstrap.InitializeProcess();
             StardewValley.Mobile.MobileDisplay.SetupDisplaySettings();
             var core = new Framework.SCore(options.ModsDirectory, writeToConsole: false, overrideDeveloperMode: false);
-            Mobile.AndroidPatcher.OnBeforeSCoreRun();
+            Mobile.AndroidRuntimeBootstrap.PrepareSession();
             core.RunInteractively();
             game = Framework.SGameRunner.Instance;
             gameView = game.Services.GetService(typeof(View)) as View

@@ -38,7 +38,7 @@ internal static class UnlockableBundlesModFix
         monitor.Log("Start UnlockableBundlesModFix");
         asm = assembly;
 
-        var hp = AndroidPatcher.harmony;
+        var hp = AndroidRuntimeBootstrap.Harmony;
         try
         {
             Mod_InventoryPage_Type = asm.GetType("Unlockable_Bundles.Lib._InventoryPage");
