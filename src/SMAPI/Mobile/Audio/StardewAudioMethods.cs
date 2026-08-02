@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.AccessControl;
 using System.Threading.Tasks;
 using HarmonyLib;
@@ -21,6 +21,13 @@ namespace StardewModdingAPI.Mobile.Facade;
 [HarmonyPatch]
 public static class StardewAudioMethods
 {
+    private sealed class CueState
+    {
+        public float Volume { get; set; } = 1f;
+        public float Pitch { get; set; }
+    }
+
+    private static readonly ConditionalWeakTable<ICue, CueState> CueStates = new();
 
     internal static readonly FieldInfo _categories_Field = AccessTools.Field(typeof(AudioEngine), "_categories");
 
@@ -128,7 +135,6 @@ public static class StardewAudioMethods
 
     //TODO
     //SoundHelper PlayLocal it don't use cue.Volume
-    static readonly Dictionary<ICue, float> holder_Volume = new();
     internal const string get_Volume_FullName = "System.Single StardewValley.ICue::get_Volume()";
     internal readonly static MethodInfo ICue_get_Volume_MethodInfo = AccessTools.Method(typeof(StardewAudioMethods), nameof(ICue_get_Volume));
     public static float ICue_get_Volume(this ICue icue)
@@ -137,13 +143,7 @@ public static class StardewAudioMethods
         {
             case CueWrapper cue:
             case DummyCue dummy:
-                if (holder_Volume.TryGetValue(icue, out float volume) is false)
-                {
-                    //create new default value
-                    holder_Volume[icue] = volume = 1f;
-                }
-
-                return volume;
+                return GetCueState(icue).Volume;
 
             default:
                 //get Volume on current type
@@ -159,7 +159,7 @@ public static class StardewAudioMethods
         {
             case DummyCue dummy:
             case CueWrapper cueWrapper:
-                holder_Volume[icue] = newValue;
+                GetCueState(icue).Volume = newValue;
                 return;
 
             default:
@@ -172,7 +172,6 @@ public static class StardewAudioMethods
 
     internal const string get_Pitch_FullName = "System.Single StardewValley.ICue::get_Pitch()";
     internal readonly static MethodInfo Get_Pitch_ProxyMethodInfo = AccessTools.Method(typeof(StardewAudioMethods), nameof(Get_Pitch_Proxy));
-    readonly static Dictionary<ICue, float> holder_Pitch = new();
     public static float Get_Pitch_Proxy(this ICue icue)
     {
         switch (icue)
@@ -182,14 +181,7 @@ public static class StardewAudioMethods
                 return 0f;
 
             case CueWrapper cueWrapper:
-
-                if (holder_Pitch.TryGetValue(icue, out float resultFromCueWrapper) is false)
-                {
-                    //create holder object with value
-                    resultFromCueWrapper = holder_Pitch[icue] = 0f;
-                }
-
-                return resultFromCueWrapper;
+                return GetCueState(icue).Pitch;
 
             default:
                 //get value from current type
@@ -207,7 +199,7 @@ public static class StardewAudioMethods
         {
             case DummyCue dummy:
             case CueWrapper cueWrapper:
-                holder_Pitch[icue] = newValue;
+                GetCueState(icue).Pitch = newValue;
                 return;
 
             default:
@@ -227,6 +219,9 @@ public static class StardewAudioMethods
         //TODO
         return false;
     }
+
+    private static CueState GetCueState(ICue cue) =>
+        CueStates.GetValue(cue, static _ => new CueState());
 
     #endregion
 }
