@@ -15,6 +15,6 @@ public static class MobileInputTool
     public static void OverrideButton(SButton sButton, bool setDown)
     {
         var input = Game1.input as SInputState;
-        input.OverrideButton(sButton, true);
+        input.OverrideButton(sButton, setDown);
     }
 }
