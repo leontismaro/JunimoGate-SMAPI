@@ -1,10 +1,6 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
@@ -18,6 +14,7 @@ namespace StardewModdingAPI.Mobile;
 internal static class AndroidSModHooks
 {
     static IMonitor Monitor => SCore.Instance.SMAPIMonitor;
+    private static readonly AndroidBackgroundTaskTracker BackgroundTasks = new();
 
     internal static void Init()
     {
@@ -53,22 +50,20 @@ internal static class AndroidSModHooks
 
         // millisecond 1000.0 == 1 sec
         double runTaskOnMainThreadTotalTime = 0;
-        int runTaskOnMainThreadCount = 0;
         while (queueTaskNeedToStartOnMainThread.TryDequeue(out var task))
         {
             bool shouldShowLogTask = task.name is not null;
             markSkipGameUpdating = true;
-            var stopwatch = Stopwatch.StartNew();
+            var startedAt = Stopwatch.GetTimestamp();
             //if (shouldShowLogTask)
             //    Monitor.Log($"Start taskOnMainThread: '{task.name}'");
 
             task.task.RunSynchronously();
-            stopwatch.Stop();
-            runTaskOnMainThreadCount++;
-            runTaskOnMainThreadTotalTime += stopwatch.Elapsed.TotalMilliseconds;
+            var elapsedMilliseconds = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+            runTaskOnMainThreadTotalTime += elapsedMilliseconds;
             if (shouldShowLogTask)
             {
-                Monitor.Log($"Done taskOnMainThread: '{task.name}' in {stopwatch.Elapsed.TotalMilliseconds}ms");
+                Monitor.Log($"Done taskOnMainThread: '{task.name}' in {elapsedMilliseconds}ms");
             }
 
             //debug
@@ -86,18 +81,8 @@ internal static class AndroidSModHooks
             }
         }
 
-        //process task background thread
-        lock (listTaskOnThreadBackground)
-        {
-            if (listTaskOnThreadBackground.Count > 0)
-            {
-                int removeCount = listTaskOnThreadBackground.RemoveAll(task => task.IsCompleted);
-            }
-            if (listTaskOnThreadBackground.Count > 0)
-            {
-                markSkipGameUpdating = true;
-            }
-        }
+        if (BackgroundTasks.HasPending)
+            markSkipGameUpdating = true;
 
         return markSkipGameUpdating;
     }
@@ -111,7 +96,6 @@ internal static class AndroidSModHooks
             this.name = name;
         }
     }
-    static List<Task> listTaskOnThreadBackground = new();
     static ConcurrentQueue<TaskOnMainThread> queueTaskNeedToStartOnMainThread = new();
 
     internal static Task AddTaskRunOnMainThread(Action callback, string name)
@@ -141,15 +125,15 @@ internal static class AndroidSModHooks
 #endif
 
         //setup
-        var currentModHookTask = new Task(() =>
+        return BackgroundTasks.Start(() =>
         {
             try
             {
-                var st = Stopwatch.StartNew();
+                var startedAt = Stopwatch.GetTimestamp();
                 Monitor.Log($"Starting Task On Background id: '{nameID}'");
                 gameTask.RunSynchronously();
-                st.Stop();
-                Monitor.Log($"Completed Task On Background id: {nameID} in {st.Elapsed.TotalMilliseconds}ms");
+                var elapsedMilliseconds = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                Monitor.Log($"Completed Task On Background id: {nameID} in {elapsedMilliseconds}ms");
             }
             catch (Exception ex)
             {
@@ -157,18 +141,6 @@ internal static class AndroidSModHooks
                 Monitor.Log($"{ex.GetLogSummary()}");
             }
         });
-
-        //Console.WriteLine("try add new task, current task count: " + listTaskOnThreadBackground.Count);
-        lock (listTaskOnThreadBackground)
-        {
-            listTaskOnThreadBackground.Add(currentModHookTask);
-        }
-
-        //ready
-        currentModHookTask.Start();
-
-        //Console.WriteLine($"End & return StartTask name: '{nameID}', taskIDNumber: {currentModHookTask.Id}");
-        return currentModHookTask;
     }
 
 }
