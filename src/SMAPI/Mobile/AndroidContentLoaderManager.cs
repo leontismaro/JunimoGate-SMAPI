@@ -37,6 +37,13 @@ internal static class AndroidContentLoaderManager
     }
     public static bool FinishedCustomLoadContent = false;
     static int CallingTick = 0;
+    internal static void Reset()
+    {
+        CallingTick = 0;
+        FinishedCustomLoadContent = false;
+        LoadState = LoadStateEnum.None;
+    }
+
     public static void UpdateMoveNextLoadContent()
     {
         CallingTick++;

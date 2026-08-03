@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using Mono.Cecil;
 using StardewModdingAPI.AndroidHost;
 
@@ -81,11 +83,28 @@ internal static class ModAssemblyBindingPlanner
                 selection => selection.Key,
                 selection => selection.Value.Path,
                 StringComparer.OrdinalIgnoreCase);
+            var sourceSnapshots = candidates
+                .GroupBy(candidate => candidate.Path, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group =>
+                    {
+                        ParsedAssembly assembly = group.First();
+                        return new ModAssemblySourceSnapshot(
+                            assembly.Path,
+                            assembly.Bytes,
+                            assembly.Definition.Name.FullName,
+                            assembly.Definition.MainModule.AssemblyReferences
+                                .Select(reference => reference.FullName)
+                                .Order(StringComparer.Ordinal)
+                                .ToArray());
+                    },
+                    StringComparer.Ordinal);
 
             monitor.Log(
                 $"JunimoGate assembly binding plan: policy={policy}, managed candidates={candidates.Length}, selected identities={selectedPaths.Count}, rejected mods={failures.Count}.",
                 failures.Count > 0 ? LogLevel.Warn : LogLevel.Debug);
-            return new ModAssemblyBindingPlan(selectedPaths, failures);
+            return new ModAssemblyBindingPlan(policy, selectedPaths, sourceSnapshots, failures);
         }
         finally
         {
@@ -531,18 +550,75 @@ internal static class ModAssemblyBindingPlanner
 
 internal sealed class ModAssemblyBindingPlan
 {
+    private readonly ModAssemblyBindingPolicy policy;
     private readonly IReadOnlyDictionary<string, string> selectedPaths;
+    private readonly IReadOnlyDictionary<string, ModAssemblySourceSnapshot> sourceSnapshots;
+    private readonly Lazy<string> cacheIdentity;
 
     public ModAssemblyBindingPlan(
+        ModAssemblyBindingPolicy policy,
         IReadOnlyDictionary<string, string> selectedPaths,
+        IReadOnlyDictionary<string, ModAssemblySourceSnapshot> sourceSnapshots,
         IReadOnlyDictionary<IModMetadata, string> failures)
     {
+        this.policy = policy;
         this.selectedPaths = selectedPaths;
+        this.sourceSnapshots = sourceSnapshots;
         this.Failures = failures;
+        this.cacheIdentity = new Lazy<string>(this.ComputeCacheIdentity);
     }
 
     public IReadOnlyDictionary<IModMetadata, string> Failures { get; }
 
     public bool TryResolve(string simpleName, out string path) =>
         this.selectedPaths.TryGetValue(simpleName, out path!);
+
+    public bool TryGetSource(string absolutePath, out ModAssemblySourceSnapshot snapshot) =>
+        this.sourceSnapshots.TryGetValue(Path.GetFullPath(absolutePath), out snapshot!);
+
+    public string CacheIdentity => this.cacheIdentity.Value;
+
+    private string ComputeCacheIdentity()
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Append(this.policy.ToString());
+        foreach ((string name, string path) in this.selectedPaths.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            Append(name.ToUpperInvariant());
+            if (!this.sourceSnapshots.TryGetValue(path, out ModAssemblySourceSnapshot? snapshot))
+                throw new InvalidOperationException($"The selected Mod assembly '{name}' has no source snapshot.");
+            Append(snapshot.FullIdentity);
+            hash.AppendData(snapshot.Bytes.Span);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+
+        void Append(string value)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(value));
+            hash.AppendData([0]);
+        }
+    }
+}
+
+internal sealed class ModAssemblySourceSnapshot
+{
+    private readonly byte[] bytes;
+
+    public ModAssemblySourceSnapshot(
+        string absolutePath,
+        byte[] bytes,
+        string fullIdentity,
+        IReadOnlyList<string> references)
+    {
+        this.AbsolutePath = Path.GetFullPath(absolutePath);
+        this.bytes = bytes;
+        this.FullIdentity = fullIdentity;
+        this.References = references;
+    }
+
+    public string AbsolutePath { get; }
+    public string FullIdentity { get; }
+    public IReadOnlyList<string> References { get; }
+    public ReadOnlyMemory<byte> Bytes => this.bytes;
+    public Stream OpenRead() => new MemoryStream(this.bytes, writable: false);
 }

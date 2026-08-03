@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
@@ -12,22 +11,6 @@ namespace StardewModdingAPI.Mobile;
 
 internal static class AndroidModLoaderManager
 {
-    public enum LoadStatus
-    {
-        None = 0,
-        Starting = 1,
-        LoadedAndNeedToConfirm = 2,
-        LoadedConfirm = 3,
-    }
-    private static int loadStatus = (int)LoadStatus.None;
-    private static readonly AndroidMainThreadTaskQueue ModEntryTasks = new();
-    public static LoadStatus CurrentStatus
-    {
-        get => (LoadStatus)Volatile.Read(ref loadStatus);
-        set => Volatile.Write(ref loadStatus, (int)value);
-    }
-
-
     static SpriteFont smallFont;
     static LocalizedContentManager content;
     private const int LoadingLogCapacity = 512;
@@ -38,7 +21,7 @@ internal static class AndroidModLoaderManager
         //wait thread mod loader
         try
         {
-            ModEntryTasks.TryRunNext();
+            AndroidSModHooks.PumpMainThreadTasks();
         }
         catch (Exception ex)
         {
@@ -48,29 +31,17 @@ internal static class AndroidModLoaderManager
     internal static void TryStartModEntry(IMod mod)
     {
         //main thread safe
-        Task taskModEntry = ModEntryTasks.Enqueue(() =>
+        Task taskModEntry = AndroidSModHooks.AddTaskRunOnMainThread(() =>
         {
             mod.Entry(mod.Helper);
             AndroidModFixManager.Instance.OnPostfixModEntry(mod);
-        });
+        }, $"Mod entry: {mod.GetType().FullName}");
 
         // log
         //Console.WriteLine("task id: " + taskModEntry.Id + ", mod name: " + mod.GetType());
         //Console.WriteLine("taskModEntry.Wait()...");
 
-        try
-        {
-            taskModEntry.Wait();
-        }
-        finally
-        {
-            //Console.WriteLine("finally taskModEntry.Wait()");
-            //Console.WriteLine(" task exception: " + taskModEntry.Exception);
-            //Console.WriteLine(" task IsCompleted: " + taskModEntry.IsCompleted);
-            //Console.WriteLine(" task IsCompletedSuccessfully: " + taskModEntry.IsCompletedSuccessfully);
-            //Console.WriteLine(" task IsFaulted: " + taskModEntry.IsFaulted);
-            //Console.WriteLine(" task IsCanceled: " + taskModEntry.IsCanceled);
-        }
+        taskModEntry.GetAwaiter().GetResult();
     }
 
     static int queueNumberShowLogger = 0;

@@ -19,7 +19,8 @@ public interface IMainThreadDispatcher
 public interface IManagedAssemblyLoader
 {
     Assembly LoadFromPath(string absolutePath);
-    Assembly LoadRewritten(string sourcePath, ReadOnlyMemory<byte> assemblyBytes, ReadOnlyMemory<byte>? symbols);
+    Assembly LoadFromBytes(string sourcePath, ReadOnlyMemory<byte> assemblyBytes, ReadOnlyMemory<byte>? symbols);
+    Assembly LoadRewritten(string sourcePath, ReadOnlyMemory<byte> sourceBytes, ReadOnlyMemory<byte> assemblyBytes, ReadOnlyMemory<byte>? symbols);
 }
 
 public enum ModAssemblyBindingPolicy
@@ -40,6 +41,8 @@ public sealed record SmapiRuntimeOptions
     public required string LogDirectory { get; init; }
     public required string SaveDirectory { get; init; }
     public required string BackupDirectory { get; init; }
+    public required string ModRewriteCacheDirectory { get; init; }
+    public required string ModRewriteCacheIdentity { get; init; }
     public required IMainThreadDispatcher MainThread { get; init; }
     public required IManagedAssemblyLoader AssemblyLoader { get; init; }
     public required ModAssemblyBindingPolicy AssemblyBindingPolicy { get; init; }
@@ -67,6 +70,7 @@ public static class AndroidHostServices
         Directory.CreateDirectory(options.SaveDirectory);
         Directory.CreateDirectory(options.BackupDirectory);
         Directory.CreateDirectory(options.ModsDirectory);
+        Directory.CreateDirectory(options.ModRewriteCacheDirectory);
         EarlyConstants.Configure(
             options.GameAssemblyDirectory,
             options.ContentDirectory,

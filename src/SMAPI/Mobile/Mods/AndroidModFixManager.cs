@@ -10,6 +10,8 @@ namespace StardewModdingAPI.Mobile;
 
 internal sealed class AndroidModFixManager
 {
+    internal const string RewriteSchema = "junimogate-android-mod-fixes/v1";
+
     private sealed class CompatibilityCallbacks
     {
         public List<Action<Assembly>> AssemblyLoaded { get; } = [];
@@ -67,6 +69,15 @@ internal sealed class AndroidModFixManager
         ArgumentNullException.ThrowIfNull(callback);
         lock (registryLock)
             GetOrCreate(assemblyName).AfterModEntry.Add(callback);
+    }
+
+    internal void ConsumeCachedRewrite(string assemblyName)
+    {
+        lock (registryLock)
+        {
+            if (registry.TryGetValue(NormalizeAssemblyName(assemblyName), out var registration))
+                registration.RewriteAssembly.Clear();
+        }
     }
 
     internal void TryRewriteMod(

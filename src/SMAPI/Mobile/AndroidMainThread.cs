@@ -21,8 +21,6 @@ internal static class AndroidMainThread
     }
     public static void InvokeOnMainThread(Action callback, string? taskName = null)
     {
-        var task = new Task(() => { callback(); });
-        AndroidSModHooks.AddTaskRunOnMainThread(task, taskName);
-        task.Wait();
+        AndroidSModHooks.AddTaskRunOnMainThread(callback, taskName).GetAwaiter().GetResult();
     }
 }

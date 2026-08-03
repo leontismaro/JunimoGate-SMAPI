@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using HarmonyLib;
@@ -15,98 +14,45 @@ internal static class AndroidSModHooks
 {
     static IMonitor Monitor => SCore.Instance.SMAPIMonitor;
     private static readonly AndroidBackgroundTaskTracker BackgroundTasks = new();
+    private static readonly AndroidMainThreadTaskQueue MainThreadTasks = new();
+    private static readonly TimeSpan MainThreadBudget = TimeSpan.FromMilliseconds(32);
 
     internal static void Init()
     {
+        MainThreadTasks.Reset();
         AndroidGameLoopManager.RegisterOnGameUpdating(OnGameUpdating_TaskUpdate);
     }
 
     internal static bool OnGameUpdating_TaskUpdate(GameTime time)
     {
 
-#if false
-        //debug only
-        if (SCore.ProcessTicksElapsed % 30 == 0 && queueTaskNeedToStartOnMainThread.IsEmpty is false)
-        {
-            Console.WriteLine();
-            Console.WriteLine("SMod Hook Updating..");
-            Console.WriteLine("task: " + queueTaskNeedToStartOnMainThread.Count);
-            //foreach (var task in tasks)
-            //{
-            //    Console.WriteLine($"status task ID: {task.Id}");
-            //    Console.WriteLine($"  status: {task.Status}");
-            //    Console.WriteLine($"  IsCanceled: {task.IsCanceled}");
-            //    Console.WriteLine($"  IsCompleted: {task.IsCompleted}");
-            //    Console.WriteLine($"  IsCompletedSuccessfully: {task.IsCompletedSuccessfully}");
-            //    Console.WriteLine($"  IsFaulted: {task.IsFaulted}");
-            //}
-        }
-#endif
-
-        bool markSkipGameUpdating = false;
-
-        //process task on main thread
-        //update main thread task
-
-        // millisecond 1000.0 == 1 sec
-        double runTaskOnMainThreadTotalTime = 0;
-        while (queueTaskNeedToStartOnMainThread.TryDequeue(out var task))
-        {
-            bool shouldShowLogTask = task.name is not null;
-            markSkipGameUpdating = true;
-            var startedAt = Stopwatch.GetTimestamp();
-            //if (shouldShowLogTask)
-            //    Monitor.Log($"Start taskOnMainThread: '{task.name}'");
-
-            task.task.RunSynchronously();
-            var elapsedMilliseconds = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
-            runTaskOnMainThreadTotalTime += elapsedMilliseconds;
-            if (shouldShowLogTask)
-            {
-                Monitor.Log($"Done taskOnMainThread: '{task.name}' in {elapsedMilliseconds}ms");
-            }
-
-            //debug
-            if (runTaskOnMainThreadTotalTime > 2000)
-            {
-                Monitor.Log($"Warn!!, current task MainThread '{task.name}' " +
-                    $"it's very long time in {runTaskOnMainThreadTotalTime:F3}ms", LogLevel.Warn);
-            }
-
-            //limit run task
-            //maybe 1-2 frame, or 16ms or 32ms
-            if (runTaskOnMainThreadTotalTime > 32)
-            {
-                break;
-            }
-        }
+        AndroidMainThreadTaskQueue.PumpResult pump = PumpMainThreadTasks();
+        bool markSkipGameUpdating = pump.ExecutedItems > 0;
 
         if (BackgroundTasks.HasPending)
             markSkipGameUpdating = true;
 
         return markSkipGameUpdating;
     }
-    internal class TaskOnMainThread
-    {
-        public readonly string? name;
-        public readonly Task task;
-        public TaskOnMainThread(Task task, string? name)
-        {
-            this.task = task;
-            this.name = name;
-        }
-    }
-    static ConcurrentQueue<TaskOnMainThread> queueTaskNeedToStartOnMainThread = new();
+    internal static Task AddTaskRunOnMainThread(Action callback, string? name = null)
+        => MainThreadTasks.Enqueue(callback, name);
 
-    internal static Task AddTaskRunOnMainThread(Action callback, string name)
-        => AddTaskRunOnMainThread(new Task(callback), name);
-
-    internal static Task AddTaskRunOnMainThread(Task yourTask, string? taskName)
+    internal static AndroidMainThreadTaskQueue.PumpResult PumpMainThreadTasks()
     {
-        var taskOnMainThread = new TaskOnMainThread(yourTask, taskName);
-        queueTaskNeedToStartOnMainThread.Enqueue(taskOnMainThread);
-        return yourTask;
+        AndroidMainThreadTaskQueue.PumpResult result = MainThreadTasks.Pump(
+            MainThreadBudget,
+            int.MaxValue,
+            static (name, elapsed) =>
+            {
+                if (name is not null)
+                    Monitor.Log($"Done taskOnMainThread: '{name}' in {elapsed.TotalMilliseconds:F3}ms");
+                if (elapsed > TimeSpan.FromSeconds(2))
+                    Monitor.Log($"Main-thread task '{name ?? "<unnamed>"}' took {elapsed.TotalMilliseconds:F3}ms.", LogLevel.Warn);
+            });
+        return result;
     }
+
+    internal static void CancelPendingMainThreadTasks(Exception reason) => MainThreadTasks.Reset(reason);
     internal static Task StartTaskBackground(Action callback, string nameID)
     {
         return StartTaskBackground(new Task(callback), nameID);

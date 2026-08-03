@@ -56,6 +56,12 @@ internal class AssemblyLoader : IDisposable
     /// <summary>The JunimoGate binding plan for local Mod dependencies.</summary>
     private readonly ModAssemblyBindingPlan? BindingPlan;
 
+    /// <summary>The app-private cache for deterministic Mod rewrites.</summary>
+    private readonly ModRewriteCache? RewriteCache;
+    private int RewriteCacheHits;
+    private int RewriteCacheMisses;
+    private int RewriteCacheWrites;
+
 
     /*********
     ** Public methods
@@ -73,6 +79,24 @@ internal class AssemblyLoader : IDisposable
         this.LogTechnicalDetailsForBrokenMods = logTechnicalDetailsForBrokenMods;
         this.BindingPlan = bindingPlan;
         this.AssemblyMap = this.TrackForDisposal(Constants.GetAssemblyMap(targetPlatform));
+#if SMAPI_FOR_ANDROID
+        if (AndroidHostServices.Options is { } options)
+        {
+            string contextIdentity = string.Join(
+                '|',
+                options.ModRewriteCacheIdentity,
+                Mobile.SMAPIAndroidBuild.BuildCode,
+                ModRewriteCache.RewriteSchema,
+                AndroidModFixManager.RewriteSchema,
+                targetPlatform,
+                Constants.ApiVersion,
+                Constants.GameVersion,
+                rewriteMods,
+                paranoidMode,
+                bindingPlan?.CacheIdentity ?? "no-binding-plan");
+            this.RewriteCache = new ModRewriteCache(options.ModRewriteCacheDirectory, contextIdentity);
+        }
+#endif
 
         // init resolver
         this.AssemblyDefinitionResolver = this.TrackForDisposal(new AssemblyDefinitionResolver());
@@ -148,11 +172,42 @@ internal class AssemblyLoader : IDisposable
             if (!assembly.HasDefinition)
                 continue;
 
-            // rewrite assembly
-            bool changed = this.RewriteAssembly(mod, assembly.Definition, loggedMessages, logPrefix: "      ");
+            ModRewriteCache.CachedRewrite cachedRewrite = default;
+            bool cacheHit = this.RewriteCache?.TryRead(
+                assembly.SourceBytes,
+                assembly.SourceSymbols,
+                out cachedRewrite) == true;
+            if (this.RewriteCache is not null)
+            {
+                if (cacheHit)
+                    this.RewriteCacheHits++;
+                else
+                    this.RewriteCacheMisses++;
+            }
+            ModWarning assemblyWarnings;
+            bool changed;
+            if (cacheHit)
+            {
+                changed = cachedRewrite.Changed;
+                assemblyWarnings = cachedRewrite.Warnings;
+                mod.SetWarning(assemblyWarnings);
+                AndroidModFixManager.Instance.ConsumeCachedRewrite(assembly.Definition.Name.Name);
+            }
+            else
+            {
+                changed = this.RewriteAssembly(
+                    mod,
+                    assembly.Definition,
+                    loggedMessages,
+                    logPrefix: "      ",
+                    out assemblyWarnings);
+            }
 
             // detect broken assembly reference
-            foreach (AssemblyNameReference reference in assembly.Definition.MainModule.AssemblyReferences)
+            IEnumerable<AssemblyNameReference> assemblyReferences = cacheHit
+                ? cachedRewrite.AssemblyReferences
+                : assembly.Definition.MainModule.AssemblyReferences;
+            foreach (AssemblyNameReference reference in assemblyReferences)
             {
                 if (!reference.Name.StartsWith("System.") && !this.IsAssemblyLoaded(reference))
                 {
@@ -160,17 +215,19 @@ internal class AssemblyLoader : IDisposable
                     if (!assumeCompatible)
                         throw new IncompatibleInstructionException($"Found a reference to missing assembly '{reference.FullName}' while loading assembly {assembly.File.Name}.");
                     mod.SetWarning(ModWarning.BrokenCodeLoaded);
+                    assemblyWarnings |= ModWarning.BrokenCodeLoaded;
                     break;
                 }
             }
 
 #if SMAPI_FOR_ANDROID
-            if (mod.Warnings != ModWarning.BrokenCodeLoaded)
+            if (!cacheHit && !mod.Warnings.HasFlag(ModWarning.BrokenCodeLoaded))
             {
                 AndroidModFixManager.Instance.TryRewriteMod(assembly, out bool hasRewriteMod, out var err);
                 if (err != null)
                 {
                     mod.SetWarning(ModWarning.BrokenCodeLoaded);
+                    assemblyWarnings |= ModWarning.BrokenCodeLoaded;
                 }
                 else if (hasRewriteMod)
                 {
@@ -186,19 +243,58 @@ internal class AssemblyLoader : IDisposable
                     this.Monitor.Log($"      Loading assembly '{assembly.File.Name}' (rewritten)...");
 
                 // load assembly
-                using MemoryStream outAssemblyStream = new();
-                using MemoryStream outSymbolStream = new();
-                assembly.Definition.Write(outAssemblyStream, new WriterParameters { WriteSymbols = true, SymbolStream = outSymbolStream, SymbolWriterProvider = this.SymbolWriterProvider });
-                byte[] bytes = outAssemblyStream.ToArray();
-                lastAssembly = AndroidHostServices.AssemblyLoader?.LoadRewritten(assembly.File.FullName, bytes, outSymbolStream.ToArray())
-                    ?? Assembly.Load(bytes, outSymbolStream.ToArray());
+                byte[] bytes;
+                byte[] symbols;
+                if (cacheHit)
+                {
+                    bytes = cachedRewrite.AssemblyBytes!;
+                    symbols = cachedRewrite.SymbolBytes ?? [];
+                }
+                else
+                {
+                    using MemoryStream outAssemblyStream = new();
+                    using MemoryStream outSymbolStream = new();
+                    assembly.Definition.Write(outAssemblyStream, new WriterParameters { WriteSymbols = true, SymbolStream = outSymbolStream, SymbolWriterProvider = this.SymbolWriterProvider });
+                    bytes = outAssemblyStream.ToArray();
+                    symbols = outSymbolStream.ToArray();
+                }
+                lastAssembly = AndroidHostServices.AssemblyLoader?.LoadRewritten(assembly.File.FullName, assembly.SourceBytes, bytes, symbols)
+                    ?? Assembly.Load(bytes, symbols);
+                if (!cacheHit)
+                {
+                    if (this.RewriteCache?.TryStore(
+                            assembly.SourceBytes,
+                            assembly.SourceSymbols,
+                            bytes,
+                            symbols,
+                            assembly.Definition.MainModule.AssemblyReferences.Select(reference => reference.FullName).ToArray(),
+                            warnings: assemblyWarnings,
+                            isCacheable: !assemblyWarnings.HasFlag(ModWarning.BrokenCodeLoaded)) == true)
+                    {
+                        this.RewriteCacheWrites++;
+                    }
+                }
             }
             else
             {
                 if (!oneAssembly)
                     this.Monitor.Log($"      Loading assembly '{assembly.File.Name}'...");
-                lastAssembly = AndroidHostServices.AssemblyLoader?.LoadFromPath(assembly.File.FullName)
-                    ?? Assembly.UnsafeLoadFrom(assembly.File.FullName);
+                lastAssembly = AndroidHostServices.AssemblyLoader?.LoadFromBytes(assembly.File.FullName, assembly.SourceBytes, symbols: null)
+                    ?? Assembly.Load(assembly.SourceBytes.ToArray());
+                if (!cacheHit)
+                {
+                    if (this.RewriteCache?.TryStore(
+                            assembly.SourceBytes,
+                            assembly.SourceSymbols,
+                            rewrittenAssembly: null,
+                            symbols: null,
+                            references: assembly.Definition.MainModule.AssemblyReferences.Select(reference => reference.FullName).ToArray(),
+                            warnings: assemblyWarnings,
+                            isCacheable: !assemblyWarnings.HasFlag(ModWarning.BrokenCodeLoaded)) == true)
+                    {
+                        this.RewriteCacheWrites++;
+                    }
+                }
             }
 
             // track loaded assembly for definition resolution
@@ -247,6 +343,12 @@ internal class AssemblyLoader : IDisposable
     /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
     public void Dispose()
     {
+        if (this.RewriteCache is not null)
+        {
+            this.Monitor.Log(
+                $"JunimoGate Mod rewrite cache: hits={this.RewriteCacheHits}, misses={this.RewriteCacheMisses}, published={this.RewriteCacheWrites}.",
+                LogLevel.Debug);
+        }
         foreach (IDisposable instance in this.Disposables)
             instance.Dispose();
     }
@@ -278,7 +380,8 @@ internal class AssemblyLoader : IDisposable
         // validate
         if (file.Directory == null)
             throw new InvalidOperationException($"Could not get directory from file path '{file.FullName}'.");
-        if (!file.Exists)
+        ModAssemblySourceSnapshot? sourceSnapshot = null;
+        if (this.BindingPlan?.TryGetSource(file.FullName, out sourceSnapshot) != true && !file.Exists)
             yield break; // not a local assembly
 
         // add the assembly's directory temporarily if needed
@@ -289,17 +392,24 @@ internal class AssemblyLoader : IDisposable
 
         // read assembly
         AssemblyDefinition assembly;
+        ReadOnlyMemory<byte> assemblyBytes = sourceSnapshot?.Bytes ?? File.ReadAllBytes(file.FullName);
+        ReadOnlyMemory<byte>? sourceSymbols = null;
         try
         {
-            byte[] assemblyBytes = File.ReadAllBytes(file.FullName);
-            Stream readStream = this.TrackForDisposal(new MemoryStream(assemblyBytes));
+            Stream readStream = this.TrackForDisposal(sourceSnapshot?.OpenRead() ?? new MemoryStream(assemblyBytes.ToArray(), writable: false));
 
             try
             {
                 // read assembly with symbols
                 FileInfo symbolsFile = new(Path.Combine(Path.GetDirectoryName(file.FullName)!, Path.GetFileNameWithoutExtension(file.FullName)) + ".pdb");
                 if (symbolsFile.Exists)
-                    this.SymbolReaderProvider.TryAddSymbolData(file.Name, () => this.TrackForDisposal(symbolsFile.OpenRead()));
+                {
+                    byte[] symbolBytes = File.ReadAllBytes(symbolsFile.FullName);
+                    sourceSymbols = symbolBytes;
+                    this.SymbolReaderProvider.TryAddSymbolData(
+                        file.Name,
+                        () => this.TrackForDisposal(new MemoryStream(symbolBytes, writable: false)));
+                }
                 assembly = this.TrackForDisposal(AssemblyDefinition.ReadAssembly(readStream, new ReaderParameters(ReadingMode.Immediate) { AssemblyResolver = assemblyResolver, InMemory = true, ReadSymbols = true, SymbolReaderProvider = this.SymbolReaderProvider }));
             }
             catch (SymbolsNotMatchingException ex)
@@ -320,7 +430,7 @@ internal class AssemblyLoader : IDisposable
         // skip if already visited
         if (!visitedAssemblyNames.Add(assembly.Name.Name))
         {
-            yield return new AssemblyParseResult(file, null, AssemblyLoadStatus.AlreadyLoaded);
+            yield return new AssemblyParseResult(file, null, AssemblyLoadStatus.AlreadyLoaded, assemblyBytes, sourceSymbols);
             yield break;
         }
 
@@ -337,7 +447,7 @@ internal class AssemblyLoader : IDisposable
         }
 
         // yield assembly
-        yield return new AssemblyParseResult(file, assembly, AssemblyLoadStatus.Okay);
+        yield return new AssemblyParseResult(file, assembly, AssemblyLoadStatus.Okay, assemblyBytes, sourceSymbols);
     }
 
     /****
@@ -350,8 +460,14 @@ internal class AssemblyLoader : IDisposable
     /// <param name="logPrefix">A string to prefix to log messages.</param>
     /// <returns>Returns whether the assembly was modified.</returns>
     /// <exception cref="IncompatibleInstructionException">An incompatible CIL instruction was found while rewriting the assembly.</exception>
-    private bool RewriteAssembly(IModMetadata mod, AssemblyDefinition assembly, HashSet<string> loggedMessages, string logPrefix)
+    private bool RewriteAssembly(
+        IModMetadata mod,
+        AssemblyDefinition assembly,
+        HashSet<string> loggedMessages,
+        string logPrefix,
+        out ModWarning warnings)
     {
+        warnings = ModWarning.None;
         ModuleDefinition module = assembly.MainModule;
         string filename = $"{assembly.Name.Name}.dll";
 
@@ -422,7 +538,7 @@ internal class AssemblyLoader : IDisposable
         foreach (IInstructionHandler handler in handlers)
         {
             foreach (var flag in handler.Flags)
-                this.ProcessInstructionHandleResult(mod, handler, flag, loggedMessages, logPrefix, filename);
+                this.ProcessInstructionHandleResult(mod, handler, flag, loggedMessages, logPrefix, filename, ref warnings);
         }
 
         return platformChanged || anyRewritten;
@@ -435,7 +551,14 @@ internal class AssemblyLoader : IDisposable
     /// <param name="loggedMessages">The messages already logged for the current mod.</param>
     /// <param name="logPrefix">A string to prefix to log messages.</param>
     /// <param name="filename">The assembly filename for log messages.</param>
-    private void ProcessInstructionHandleResult(IModMetadata mod, IInstructionHandler handler, InstructionHandleResult result, HashSet<string> loggedMessages, string logPrefix, string filename)
+    private void ProcessInstructionHandleResult(
+        IModMetadata mod,
+        IInstructionHandler handler,
+        InstructionHandleResult result,
+        HashSet<string> loggedMessages,
+        string logPrefix,
+        string filename,
+        ref ModWarning warnings)
     {
         // get message template
         // ($phrase is replaced with the noun phrase or messages)
@@ -449,36 +572,43 @@ internal class AssemblyLoader : IDisposable
             case InstructionHandleResult.NotCompatible:
                 template = $"{logPrefix}Broken code in {filename}: $phrase.";
                 mod.SetWarning(ModWarning.BrokenCodeLoaded);
+                warnings |= ModWarning.BrokenCodeLoaded;
                 break;
 
             case InstructionHandleResult.DetectedGamePatch:
                 template = $"{logPrefix}Detected game patcher in assembly {filename}."; // no need for phrase, which would confusingly be 'Harmony 1.x' here
                 mod.SetWarning(ModWarning.PatchesGame);
+                warnings |= ModWarning.PatchesGame;
                 break;
 
             case InstructionHandleResult.DetectedSaveSerializer:
                 template = $"{logPrefix}Detected possible save serializer change ($phrase) in assembly {filename}.";
                 mod.SetWarning(ModWarning.ChangesSaveSerializer);
+                warnings |= ModWarning.ChangesSaveSerializer;
                 break;
 
             case InstructionHandleResult.DetectedUnvalidatedUpdateTick:
                 template = $"{logPrefix}Detected reference to $phrase in assembly {filename}.";
                 mod.SetWarning(ModWarning.UsesUnvalidatedUpdateTick);
+                warnings |= ModWarning.UsesUnvalidatedUpdateTick;
                 break;
 
             case InstructionHandleResult.DetectedConsoleAccess:
                 template = $"{logPrefix}Detected direct console access ($phrase) in assembly {filename}.";
                 mod.SetWarning(ModWarning.AccessesConsole);
+                warnings |= ModWarning.AccessesConsole;
                 break;
 
             case InstructionHandleResult.DetectedFilesystemAccess:
                 template = $"{logPrefix}Detected filesystem access ($phrase) in assembly {filename}.";
                 mod.SetWarning(ModWarning.AccessesFilesystem);
+                warnings |= ModWarning.AccessesFilesystem;
                 break;
 
             case InstructionHandleResult.DetectedShellAccess:
                 template = $"{logPrefix}Detected shell or process access ($phrase) in assembly {filename}.";
                 mod.SetWarning(ModWarning.AccessesShell);
+                warnings |= ModWarning.AccessesShell;
                 break;
 
             case InstructionHandleResult.None:

@@ -120,6 +120,7 @@ internal class SCore : IDisposable
     private readonly ModRegistry ModRegistry = new();
 #if SMAPI_FOR_ANDROID
     public ModRegistry GetModRegistry() => this.ModRegistry;
+    private readonly AndroidStartupCoordinator AndroidStartup = new();
 #endif
 
     /// <summary>Manages SMAPI events for mods.</summary>
@@ -293,7 +294,7 @@ internal class SCore : IDisposable
                 onGameContentLoaded: this.OnInstanceContentLoaded,
                 onLoadStageChanged: this.OnLoadStageChanged,
 #if SMAPI_FOR_ANDROID
-                onGameUpdating: this.OnGameUpdateForModLoader,
+                onGameUpdating: this.OnAndroidStartupUpdate,
 #else
 
                 onGameUpdating: this.OnGameUpdating,
@@ -498,7 +499,7 @@ internal class SCore : IDisposable
 
 #if SMAPI_FOR_ANDROID
         Console.WriteLine("start loading mods in background thread");
-        AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.Starting;
+        this.AndroidStartup.BeginModLoading();
         AndroidModLoaderManager.StartLoggerToScreen();
         Task.Run(() =>
         {
@@ -598,7 +599,7 @@ internal class SCore : IDisposable
                 new GenericModConfigMenuIntegration(this.Monitor, this.Translator, () => this.Settings, this.ReloadSettings).Register(this.ModRegistry);
 
 #if SMAPI_FOR_ANDROID
-            AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.LoadedAndNeedToConfirm;
+            this.AndroidStartup.CompleteModLoading();
             AndroidHostServices.Options?.ReportModLoadingReady();
 #endif
         }
@@ -610,6 +611,7 @@ internal class SCore : IDisposable
             task =>
             {
                 Exception exception = task.Exception?.GetBaseException() ?? new InvalidOperationException("The Android mod loader failed without an exception.");
+                this.AndroidStartup.Fail(exception);
                 this.Monitor.Log($"Android mod loading failed before completion.\n{exception.GetLogSummary()}", LogLevel.Error);
                 AndroidHostServices.Options?.ReportFailure(new SmapiFailure("mod_loading_failed", exception.Message, exception));
             },
@@ -659,62 +661,18 @@ internal class SCore : IDisposable
     }
 
 #if SMAPI_FOR_ANDROID
-    private void OnGameUpdateForModLoader(GameTime gameTime, Action runGameUpdate)
+    private void OnAndroidStartupUpdate(GameTime gameTime, Action runGameUpdate)
     {
         try
         {
-            //assert load mods
-            switch (AndroidModLoaderManager.CurrentStatus)
-            {
-                case AndroidModLoaderManager.LoadStatus.Starting:
-                    //skip it, wait until loaded all mod
-                    AndroidModLoaderManager.TickUpdate();
-                    break;
-
-                case AndroidModLoaderManager.LoadStatus.LoadedAndNeedToConfirm:
-                    //confirm status
-                    //loaded all every thing
-                    //ready to run OnGameUpdating original
-                    Console.WriteLine("AndroidModLoader set status to LoadedConfirm");
-                    AndroidModLoaderManager.CurrentStatus = AndroidModLoaderManager.LoadStatus.LoadedConfirm;
-                    SGameRunner.Instance.OnGameUpdating = this.OnGameUpdateForContentLoaderAndroid;
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine(ex);
-        }
-    }
-
-    private void OnGameUpdateForContentLoaderAndroid(GameTime gameTime, Action runGameUpdate)
-    {
-        try
-        {
-            //wait until loaded content
-            switch (AndroidContentLoaderManager.LoadState)
-            {
-                case AndroidContentLoaderManager.LoadStateEnum.None:
-                case AndroidContentLoaderManager.LoadStateEnum.Loading:
-                    AndroidContentLoaderManager.UpdateMoveNextLoadContent();
-                    break;
-
-                case AndroidContentLoaderManager.LoadStateEnum.Loaded:
-                    //loaded all game asset
-                    Console.WriteLine("AndroidContentLoader set status to Loaded");
-                    break;
-            }
-
-            //wait until game has show splash screen icon
-            if (Game1.activeClickableMenu != null)
-            {
-                AndroidModLoaderManager.StopLoggerToScreen();
+            if (this.AndroidStartup.Update())
                 SGameRunner.Instance.OnGameUpdating = this.OnGameUpdating;
-            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine(ex);
+            this.AndroidStartup.Fail(ex);
+            this.Monitor.Log($"Android startup failed.\n{ex.GetLogSummary()}", LogLevel.Error);
+            AndroidHostServices.Options?.ReportFailure(new SmapiFailure("android_startup_failed", ex.Message, ex));
         }
     }
 
