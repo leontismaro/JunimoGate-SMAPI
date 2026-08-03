@@ -411,7 +411,7 @@ internal class InstructionMetadata
         // code which may impact game stability
 #if SMAPI_FOR_ANDROID
         yield return new FieldFinder(typeof(SaveGame).FullName!,
-            ["serializer", "farmerSerializer", "locationSerializer"],
+            ["serializer", "farmerSerializer", "locationSerializer", "descriptionElementSerializer", "legacyDescriptionElementSerializer"],
             InstructionHandleResult.DetectedSaveSerializer);
 #else
         yield return new FieldFinder(typeof(SaveGame).FullName!, new[] { nameof(SaveGame.serializer), nameof(SaveGame.farmerSerializer), nameof(SaveGame.locationSerializer) }, InstructionHandleResult.DetectedSaveSerializer);
