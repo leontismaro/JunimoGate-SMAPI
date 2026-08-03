@@ -34,7 +34,7 @@ internal static class AndroidPatcher
         // menu is created by a future lifecycle-aware adapter.
         monitor.Log("Applying Android letter viewer adapters...");
         LetterViewerMenuRewriter.ApplyPatch(harmony);
-        monitor.Log("Android compatibility adapters ready.");
+        monitor.Log("Android runtime patches ready.");
     }
 
     // Disable checkForAndLoadEmergencySave for Emergency Save

@@ -2,7 +2,6 @@ using System;
 using HarmonyLib;
 using StardewModdingAPI.Framework;
 using StardewModdingAPI.Internal;
-using StardewModdingAPI.Mobile.Mods;
 
 namespace StardewModdingAPI.Mobile;
 
@@ -35,9 +34,6 @@ internal static class AndroidRuntimeBootstrap
     public static void PrepareSession()
     {
         new SaveBackupZip().Start();
-
-        AndroidModCompatibilityRegistry.Initialize();
-
         AndroidPatcher.Apply(Harmony, SCore.Instance.SMAPIMonitor);
     }
 }

@@ -119,7 +119,6 @@ internal class SCore : IDisposable
     /// <remarks>This is initialized after the game starts.</remarks>
     private readonly ModRegistry ModRegistry = new();
 #if SMAPI_FOR_ANDROID
-    public ModRegistry GetModRegistry() => this.ModRegistry;
     private readonly AndroidStartupCoordinator AndroidStartup = new();
 #endif
 
@@ -1457,25 +1456,14 @@ internal class SCore : IDisposable
             this.RaiseRenderEvent(events.RenderingStep, spriteBatch, renderTarget, RenderingStepEventArgs.Instance(step));
     }
 
-#if SMAPI_FOR_ANDROID
-    public delegate void OnRenderedStepDelegate(RenderSteps step, SpriteBatch spriteBatch, RenderTarget2D? renderTarget);
-    public static event OnRenderedStepDelegate OnRenderedStepEvent;
-#endif
     /// <summary>Raised when the game finishes a render step in the draw loop.</summary>
     /// <param name="step">The render step being started.</param>
     /// <param name="spriteBatch">The sprite batch being drawn (which might not always be open yet).</param>
     /// <param name="renderTarget">The render target being drawn.</param>
     private void OnRenderedStep(RenderSteps step, SpriteBatch spriteBatch, RenderTarget2D? renderTarget)
     {
-#if SMAPI_FOR_ANDROID
-        if (OnRenderedStepEvent == null && !this.EventManager.HasRenderedStepListeners)
-            return;
-
-        OnRenderedStepEvent?.Invoke(step, spriteBatch, renderTarget);
-#else
         if (!this.EventManager.HasRenderedStepListeners)
             return;
-#endif
 
         var events = this.EventManager;
 

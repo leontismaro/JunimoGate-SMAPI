@@ -87,7 +87,6 @@ internal class AssemblyLoader : IDisposable
                 options.ModRewriteCacheIdentity,
                 Mobile.SMAPIAndroidBuild.BuildCode,
                 ModRewriteCache.RewriteSchema,
-                AndroidModFixManager.RewriteSchema,
                 targetPlatform,
                 Constants.ApiVersion,
                 Constants.GameVersion,
@@ -191,7 +190,6 @@ internal class AssemblyLoader : IDisposable
                 changed = cachedRewrite.Changed;
                 assemblyWarnings = cachedRewrite.Warnings;
                 mod.SetWarning(assemblyWarnings);
-                AndroidModFixManager.Instance.ConsumeCachedRewrite(assembly.Definition.Name.Name);
             }
             else
             {
@@ -219,22 +217,6 @@ internal class AssemblyLoader : IDisposable
                     break;
                 }
             }
-
-#if SMAPI_FOR_ANDROID
-            if (!cacheHit && !mod.Warnings.HasFlag(ModWarning.BrokenCodeLoaded))
-            {
-                AndroidModFixManager.Instance.TryRewriteMod(assembly, out bool hasRewriteMod, out var err);
-                if (err != null)
-                {
-                    mod.SetWarning(ModWarning.BrokenCodeLoaded);
-                    assemblyWarnings |= ModWarning.BrokenCodeLoaded;
-                }
-                else if (hasRewriteMod)
-                {
-                    changed = true;
-                }
-            }
-#endif
 
             // load assembly
             if (changed)

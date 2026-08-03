@@ -31,11 +31,9 @@ internal static class AndroidModLoaderManager
     internal static void TryStartModEntry(IMod mod)
     {
         //main thread safe
-        Task taskModEntry = AndroidSModHooks.AddTaskRunOnMainThread(() =>
-        {
-            mod.Entry(mod.Helper);
-            AndroidModFixManager.Instance.OnPostfixModEntry(mod);
-        }, $"Mod entry: {mod.GetType().FullName}");
+        Task taskModEntry = AndroidSModHooks.AddTaskRunOnMainThread(
+            () => mod.Entry(mod.Helper),
+            $"Mod entry: {mod.GetType().FullName}");
 
         // log
         //Console.WriteLine("task id: " + taskModEntry.Id + ", mod name: " + mod.GetType());

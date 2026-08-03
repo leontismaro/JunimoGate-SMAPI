@@ -16,6 +16,7 @@ Apply and review the layers in branch order:
 | `perf(android): eliminate console polling` | JunimoGate `e011ab1` | Remove the idle developer-console polling thread |
 | `perf(android): skip unused frame tracking` | JunimoGate `258d8c1` | Subscriber-aware watcher/render short circuits and idle cleanup |
 | `feat(android): migrate runtime patches to SMAPI 4.5.2` | JunimoGate `e582d17` | Upstream 4.5.2 input, content, metadata, compatibility and security changes |
+| `refactor(android): remove legacy Mod fixes` | current Android branch | Remove global Mod-specific rewrite, render, menu and post-entry hooks; retain the standard SMAPI assembly-load and `Mod.Entry` path |
 
 The first import is a selected product snapshot, not a claim that JunimoGate
 authored the Android fork. Preserve the `Ported-from`, `Source-snapshot`, and
@@ -24,3 +25,6 @@ authored the Android fork. Preserve the `Ported-from`, `Source-snapshot`, and
 JunimoGate pins an exact commit through its `smapi/` submodule. Do not set a
 submodule branch that silently advances during a launcher build.
 
+Android compatibility belongs in the shared runtime/platform boundary or in the
+affected Mod itself. Do not add launcher-side behavior selected by a Mod ID,
+exact Mod version, or entry assembly name.
