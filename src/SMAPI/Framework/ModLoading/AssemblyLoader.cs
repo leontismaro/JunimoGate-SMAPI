@@ -85,7 +85,6 @@ internal class AssemblyLoader : IDisposable
             string contextIdentity = string.Join(
                 '|',
                 options.ModRewriteCacheIdentity,
-                Mobile.SMAPIAndroidBuild.BuildCode,
                 ModRewriteCache.RewriteSchema,
                 targetPlatform,
                 Constants.ApiVersion,
