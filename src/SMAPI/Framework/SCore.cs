@@ -131,6 +131,9 @@ internal class SCore : IDisposable
     /// <summary>The path to search for mods.</summary>
     private string ModsPath => Constants.ModsPath;
 
+    /// <summary>The exact Mod roots selected by the Android host, or <c>null</c> to scan the normal Mods path.</summary>
+    private readonly IReadOnlyList<string>? SelectedModPaths;
+
     /// <summary>The override to apply for <see cref="SConfig.DeveloperMode"/>, or <c>null</c> to use the value from the settings file.</summary>
     private readonly bool? OverrideDeveloperMode;
 
@@ -195,13 +198,24 @@ internal class SCore : IDisposable
     /// <param name="writeToConsole">Whether to output log messages to the console.</param>
     /// <param name="overrideDeveloperMode">The override to apply for <see cref="SConfig.DeveloperMode"/>, or <c>null</c> to use the value from the settings file.</param>
     public SCore(string modsPath, bool writeToConsole, bool? overrideDeveloperMode)
+        : this(modsPath, selectedModPaths: null, writeToConsole, overrideDeveloperMode)
+    {
+    }
+
+    /// <summary>Construct an instance with an optional exact set of Mod roots.</summary>
+    /// <param name="modsPath">The common path which owns all selected Mod roots.</param>
+    /// <param name="selectedModPaths">The exact Mod roots to scan, or <c>null</c> for the normal recursive scan.</param>
+    /// <param name="writeToConsole">Whether to output log messages to the console.</param>
+    /// <param name="overrideDeveloperMode">The override to apply for <see cref="SConfig.DeveloperMode"/>, or <c>null</c> to use the value from the settings file.</param>
+    internal SCore(string modsPath, IReadOnlyList<string>? selectedModPaths, bool writeToConsole, bool? overrideDeveloperMode)
     {
         SCore.Instance = this;
 
         // init paths
         this.VerifyPath(modsPath);
         this.VerifyPath(Constants.LogDir);
-        Constants.ModsPath = modsPath;
+        Constants.ModsPath = Path.GetFullPath(modsPath);
+        this.SelectedModPaths = NormalizeSelectedModPaths(Constants.ModsPath, selectedModPaths);
 
         // init log file
         this.PurgeNormalLogs();
@@ -508,14 +522,18 @@ internal class SCore : IDisposable
         {
             bool foundMaliciousFiles = false;
 
-            foreach ((string filePath, LooseFileBlacklistEntryModel match) in modBlacklist.CheckLooseFiles(this.ModsPath))
+            IEnumerable<string> looseFileRoots = this.SelectedModPaths ?? [this.ModsPath];
+            foreach (string looseFileRoot in looseFileRoots)
             {
-                foundMaliciousFiles = true;
+                foreach ((string filePath, LooseFileBlacklistEntryModel match) in modBlacklist.CheckLooseFiles(looseFileRoot))
+                {
+                    foundMaliciousFiles = true;
 
-                this.Monitor.LogFatal("Malicious mod file detected.");
-                this.Monitor.Log($"File path: '{filePath}'", LogLevel.Error);
-                this.Monitor.Newline();
-                this.Monitor.Log(match.Message ?? "This file has been flagged as malicious. You should immediately delete the mod containing the file, and perform a full anti-malware scan of your computer to be safe.", LogLevel.Error);
+                    this.Monitor.LogFatal("Malicious mod file detected.");
+                    this.Monitor.Log($"File path: '{filePath}'", LogLevel.Error);
+                    this.Monitor.Newline();
+                    this.Monitor.Log(match.Message ?? "This file has been flagged as malicious. You should immediately delete the mod containing the file, and perform a full anti-malware scan of your computer to be safe.", LogLevel.Error);
+                }
             }
 
             if (foundMaliciousFiles)
@@ -528,6 +546,7 @@ internal class SCore : IDisposable
             ModResolver resolver = new();
 
             // log loose files
+            if (this.SelectedModPaths is null)
             {
                 string[] looseFiles = new DirectoryInfo(this.ModsPath).GetFiles().Select(p => p.Name).ToArray();
                 if (looseFiles.Any())
@@ -542,7 +561,13 @@ internal class SCore : IDisposable
             }
 
             // load manifests
-            IModMetadata[] mods = resolver.ReadManifests(toolkit, this.ModsPath, modBlacklist, modDatabase, useCaseInsensitiveFilePaths: this.Settings.UseCaseInsensitivePaths).ToArray();
+            IModMetadata[] mods = resolver.ReadManifests(
+                toolkit,
+                this.ModsPath,
+                modBlacklist,
+                modDatabase,
+                useCaseInsensitiveFilePaths: this.Settings.UseCaseInsensitivePaths,
+                selectedModPaths: this.SelectedModPaths).ToArray();
 
             // filter out ignored mods
             foreach (IModMetadata mod in mods.Where(p => p.IsIgnored))
@@ -2135,6 +2160,30 @@ internal class SCore : IDisposable
             // note: this happens before this.Monitor is initialized
             Console.WriteLine($"Couldn't create a path: {path}\n\n{ex.GetLogSummary()}");
         }
+    }
+
+    /// <summary>Normalize and validate exact Android Mod roots without scanning the common library root.</summary>
+    private static IReadOnlyList<string>? NormalizeSelectedModPaths(
+        string modsPath,
+        IReadOnlyList<string>? selectedModPaths)
+    {
+        if (selectedModPaths is null)
+            return null;
+
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(modsPath));
+        HashSet<string> unique = new(StringComparer.Ordinal);
+        List<string> normalized = [];
+        foreach (string selectedPath in selectedModPaths)
+        {
+            if (string.IsNullOrWhiteSpace(selectedPath) || !Path.IsPathFullyQualified(selectedPath))
+                throw new InvalidDataException("A selected Mod path is not absolute.");
+            string path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedPath));
+            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !Directory.Exists(path))
+                throw new InvalidDataException("A selected Mod path is outside the common Mods root or missing.");
+            if (unique.Add(path))
+                normalized.Add(path);
+        }
+        return normalized;
     }
 
     /// <summary>Load and hook up the given mods.</summary>

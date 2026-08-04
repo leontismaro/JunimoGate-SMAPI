@@ -27,9 +27,19 @@ internal class ModResolver
     /// <param name="modDatabase">Handles access to SMAPI's internal mod metadata list.</param>
     /// <param name="useCaseInsensitiveFilePaths">Whether to match file paths case-insensitively, even on Linux.</param>
     /// <returns>Returns the manifests by relative folder.</returns>
-    public IEnumerable<IModMetadata> ReadManifests(ModToolkit toolkit, string rootPath, ModBlacklist modBlacklist, ModDatabase modDatabase, bool useCaseInsensitiveFilePaths)
+    public IEnumerable<IModMetadata> ReadManifests(
+        ModToolkit toolkit,
+        string rootPath,
+        ModBlacklist modBlacklist,
+        ModDatabase modDatabase,
+        bool useCaseInsensitiveFilePaths,
+        IReadOnlyList<string>? selectedModPaths = null)
     {
-        foreach (ModFolder folder in toolkit.GetModFolders(rootPath, useCaseInsensitiveFilePaths))
+        IEnumerable<ModFolder> folders = selectedModPaths is null
+            ? toolkit.GetModFolders(rootPath, useCaseInsensitiveFilePaths)
+            : selectedModPaths.SelectMany(modPath =>
+                toolkit.GetModFolders(rootPath, modPath, useCaseInsensitiveFilePaths));
+        foreach (ModFolder folder in folders)
         {
             Manifest? manifest = folder.Manifest;
 

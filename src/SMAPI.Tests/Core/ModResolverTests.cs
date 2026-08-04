@@ -127,6 +127,43 @@ public class ModResolverTests
         Directory.Delete(rootFolder, recursive: true);
     }
 
+    [Test(Description = "Assert that an exact Mod root list doesn't scan unselected sibling Mods.")]
+    public void ReadBasicManifest_SelectedRoots_OnlyReturnsSelectedMods()
+    {
+        string rootFolder = this.GetTempFolderPath();
+        string selectedFolder = Path.Combine(rootFolder, "library", "selected", "files");
+        string ignoredFolder = Path.Combine(rootFolder, "library", "ignored", "files");
+        Directory.CreateDirectory(selectedFolder);
+        Directory.CreateDirectory(ignoredFolder);
+        File.WriteAllText(Path.Combine(selectedFolder, "manifest.json"), JsonConvert.SerializeObject(new
+        {
+            Name = "Selected",
+            Author = "Test",
+            Version = "1.0.0",
+            UniqueID = "Test.Selected"
+        }));
+        File.WriteAllText(Path.Combine(ignoredFolder, "manifest.json"), JsonConvert.SerializeObject(new
+        {
+            Name = "Ignored",
+            Author = "Test",
+            Version = "1.0.0",
+            UniqueID = "Test.Ignored"
+        }));
+
+        IModMetadata[] mods = new ModResolver().ReadManifests(
+            new ModToolkit(),
+            rootFolder,
+            new ModBlacklist(),
+            new ModDatabase(),
+            useCaseInsensitiveFilePaths: true,
+            selectedModPaths: [selectedFolder]).ToArray();
+
+        mods.Should().ContainSingle();
+        mods[0].Manifest.UniqueID.Should().Be("Test.Selected");
+        mods[0].DirectoryPath.Should().Be(selectedFolder);
+        Directory.Delete(rootFolder, recursive: true);
+    }
+
     /****
     ** ValidateManifests
     ****/

@@ -256,7 +256,11 @@ internal class Program
         developerMode ??= false;
         writeToConsole = false;
         modsPath = AndroidHostServices.Options?.ModsDirectory ?? Path.Combine(EarlyConstants.ExternalFilesDir, "Mods");
-        SCore core = new(modsPath, writeToConsole, developerMode);
+        SCore core = new(
+            modsPath,
+            AndroidHostServices.Options?.ModDirectories,
+            writeToConsole,
+            developerMode);
         AndroidRuntimeBootstrap.PrepareSession();
         core.RunInteractively();
 #endif

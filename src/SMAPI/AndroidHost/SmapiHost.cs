@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -36,6 +37,7 @@ public sealed record SmapiRuntimeOptions
     public required string GameAssemblyDirectory { get; init; }
     public required string ContentDirectory { get; init; }
     public required string ModsDirectory { get; init; }
+    public required IReadOnlyList<string>? ModDirectories { get; init; }
     public required string InternalDirectory { get; init; }
     public required string ConfigDirectory { get; init; }
     public required string LogDirectory { get; init; }
@@ -70,6 +72,11 @@ public static class AndroidHostServices
         Directory.CreateDirectory(options.SaveDirectory);
         Directory.CreateDirectory(options.BackupDirectory);
         Directory.CreateDirectory(options.ModsDirectory);
+        foreach (string modDirectory in options.ModDirectories ?? [])
+        {
+            if (!Directory.Exists(modDirectory))
+                throw new DirectoryNotFoundException($"A selected Mod directory is missing: {modDirectory}");
+        }
         Directory.CreateDirectory(options.ModRewriteCacheDirectory);
         EarlyConstants.Configure(
             options.GameAssemblyDirectory,
@@ -113,7 +120,11 @@ public sealed class SmapiSession : IDisposable
             AndroidHostServices.Configure(options);
             Mobile.AndroidRuntimeBootstrap.InitializeProcess();
             StardewValley.Mobile.MobileDisplay.SetupDisplaySettings();
-            var core = new Framework.SCore(options.ModsDirectory, writeToConsole: false, overrideDeveloperMode: false);
+            var core = new Framework.SCore(
+                options.ModsDirectory,
+                options.ModDirectories,
+                writeToConsole: false,
+                overrideDeveloperMode: false);
             Mobile.AndroidRuntimeBootstrap.PrepareSession();
             core.RunInteractively();
             game = Framework.SGameRunner.Instance;
