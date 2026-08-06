@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
+using StardewModdingAPI.AndroidHost;
 using StardewModdingAPI.Framework;
 using StardewModdingAPI.Internal.ConsoleWriting;
 using StardewValley;
@@ -47,6 +48,8 @@ internal static class AndroidModLoaderManager
     static void ClearLogs() => LoadingLogs.Clear();
     internal static void StartLoggerToScreen()
     {
+        if (AndroidHostServices.Options?.ShowLoadingLogsOnScreen == false)
+            return;
 
         //initialize
         if (content is null)
@@ -64,6 +67,9 @@ internal static class AndroidModLoaderManager
 
     internal static void StopLoggerToScreen()
     {
+        if (AndroidHostServices.Options?.ShowLoadingLogsOnScreen == false)
+            return;
+
         StardewModdingAPI.Framework.Monitor.UnregisterOnLogImpl(OnLogImpl);
         queueNumberShowLogger--;
         ClearLogs();

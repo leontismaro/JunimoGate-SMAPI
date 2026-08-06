@@ -48,8 +48,10 @@ public sealed record SmapiRuntimeOptions
     public required IMainThreadDispatcher MainThread { get; init; }
     public required IManagedAssemblyLoader AssemblyLoader { get; init; }
     public required ModAssemblyBindingPolicy AssemblyBindingPolicy { get; init; }
+    public bool ShowLoadingLogsOnScreen { get; init; } = true;
     public required Action<View> AttachGameView { get; init; }
     public required Action ReportModLoadingReady { get; init; }
+    public required Action ReportGameViewReady { get; init; }
     public required Action<SmapiFailure> ReportFailure { get; init; }
 }
 

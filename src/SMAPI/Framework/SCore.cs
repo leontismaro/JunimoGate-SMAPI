@@ -120,6 +120,7 @@ internal class SCore : IDisposable
     private readonly ModRegistry ModRegistry = new();
 #if SMAPI_FOR_ANDROID
     private readonly AndroidStartupCoordinator AndroidStartup = new();
+    private bool IsAndroidGameViewReadyPending;
 #endif
 
     /// <summary>Manages SMAPI events for mods.</summary>
@@ -690,7 +691,10 @@ internal class SCore : IDisposable
         try
         {
             if (this.AndroidStartup.Update())
+            {
+                this.IsAndroidGameViewReadyPending = true;
                 SGameRunner.Instance.OnGameUpdating = this.OnGameUpdating;
+            }
         }
         catch (Exception ex)
         {
@@ -1523,6 +1527,12 @@ internal class SCore : IDisposable
     /// <summary>Raise the full-frame rendered event after the Android game has composited its render targets, but before MonoGame presents the backbuffer.</summary>
     private void OnAndroidRendered(GameTime _)
     {
+        if (this.IsAndroidGameViewReadyPending)
+        {
+            this.IsAndroidGameViewReadyPending = false;
+            AndroidHostServices.Options?.ReportGameViewReady();
+        }
+
         if (!this.EventManager.Rendered.HasListeners)
             return;
 
