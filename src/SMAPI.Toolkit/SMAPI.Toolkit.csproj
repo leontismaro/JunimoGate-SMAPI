@@ -7,12 +7,24 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsTrimmable>false</IsTrimmable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <DefineConstants Condition="'$(SmapiAndroidRuntime)' == 'true'">$(DefineConstants);SMAPI_FOR_ANDROID</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" />
     <PackageReference Include="Markdig" />
     <PackageReference Include="Newtonsoft.Json" />
-    <PackageReference Include="Pathoschild.Http.FluentClient" />
+    <PackageReference Include="Pathoschild.Http.FluentClient"
+                      Condition="'$(SmapiAndroidRuntime)' != 'true'"
+                      PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SmapiAndroidRuntime)' == 'true'">
+    <Compile Remove="Framework/Clients/ApiCacheHeaders.cs" />
+    <Compile Remove="Framework/Clients/CompatibilityRepo/CompatibilityRepoClient.cs" />
+    <Compile Remove="Framework/Clients/CompatibilityRepo/Internal/SetResponseTypeFilter.cs" />
+    <Compile Remove="Framework/Clients/CurseForgeExport/**/*.cs" />
+    <Compile Remove="Framework/Clients/ModDropExport/**/*.cs" />
+    <Compile Remove="Framework/Clients/NexusExport/**/*.cs" />
+    <Compile Remove="Framework/Clients/WebApi/WebApiClient.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../SMAPI.Toolkit.CoreInterfaces/SMAPI.Toolkit.CoreInterfaces.csproj" />

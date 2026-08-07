@@ -33,7 +33,7 @@ in future SMAPI versions.
      * versions are available, an alert will be shown in the console. This doesn't affect the load
      * time even if your connection is offline or slow, because it happens in the background.
      */
-    "CheckForUpdates": true,
+    "CheckForUpdates": false,
 
     /**
      * Whether SMAPI should check whether the content files are present and unmodified. This should

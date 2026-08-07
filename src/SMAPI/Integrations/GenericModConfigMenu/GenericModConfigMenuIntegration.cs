@@ -77,6 +77,7 @@ namespace StardewModdingAPI.Integrations.GenericModConfigMenu
 
                 // add 'SMAPI features' section
                 api.AddSectionTitle(smapiMod.Manifest, () => this.Translations.Get("config.section.features"));
+#if !SMAPI_FOR_ANDROID
                 api.AddBoolOption(
                     mod: smapiMod.Manifest,
                     name: () => this.Translations.Get("config.check-for-updates.name"),
@@ -84,6 +85,7 @@ namespace StardewModdingAPI.Integrations.GenericModConfigMenu
                     getValue: () => getConfig().CheckForUpdates,
                     setValue: value => this.StageOption(nameof(SConfig.CheckForUpdates), value)
                 );
+#endif
                 api.AddBoolOption(
                     mod: smapiMod.Manifest,
                     name: () => this.Translations.Get("config.check-content-integrity.name"),

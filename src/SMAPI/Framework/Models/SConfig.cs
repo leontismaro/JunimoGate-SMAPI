@@ -15,8 +15,13 @@ internal class SConfig
     /// <summary>The default config values, for fields that should be logged if different.</summary>
     private static readonly IDictionary<string, object> DefaultValues = new Dictionary<string, object>
     {
+#if SMAPI_FOR_ANDROID
+        [nameof(SConfig.CheckForUpdates)] = false,
+        [nameof(SConfig.CheckForBlacklistUpdates)] = false,
+#else
         [nameof(SConfig.CheckForUpdates)] = true,
         [nameof(SConfig.CheckForBlacklistUpdates)] = true,
+#endif
         [nameof(SConfig.CheckContentIntegrity)] = true,
 #if SMAPI_FOR_ANDROID
         [nameof(SConfig.ListenForConsoleInput)] = false,

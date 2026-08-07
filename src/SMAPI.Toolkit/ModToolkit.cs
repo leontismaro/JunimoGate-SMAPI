@@ -3,7 +3,9 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+#if !SMAPI_FOR_ANDROID
 using StardewModdingAPI.Toolkit.Framework.Clients.CompatibilityRepo;
+#endif
 using StardewModdingAPI.Toolkit.Framework.GameScanning;
 using StardewModdingAPI.Toolkit.Framework.ModBlacklistData;
 using StardewModdingAPI.Toolkit.Framework.ModData;
@@ -64,6 +66,7 @@ public class ModToolkit
         return new GameScanner().ScanIncludingInvalid();
     }
 
+#if !SMAPI_FOR_ANDROID
     /// <summary>Extract mod metadata from the compatibility list repo.</summary>
     public async Task<ModCompatibilityEntry[]> GetCompatibilityListAsync()
     {
@@ -78,6 +81,7 @@ public class ModToolkit
         using CompatibilityRepoClient client = new(this.UserAgent);
         return await client.FetchModsFromLocalGitFolderAsync(gitRepoPath);
     }
+#endif
 
     /// <summary>Get SMAPI's internal blacklist of malicious or harmful mods.</summary>
     /// <param name="path">The file path for the SMAPI blacklist file.</param>

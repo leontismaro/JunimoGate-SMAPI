@@ -8,7 +8,7 @@
     <Version>4.5.2</Version>
     <AssemblyVersion>4.5.2.0</AssemblyVersion>
     <FileVersion>4.5.2.0</FileVersion>
-    <InformationalVersion>4.5.2-junimogate.38+save-serializer-bridge</InformationalVersion>
+    <InformationalVersion>4.5.2-junimogate.39</InformationalVersion>
     <PlatformTarget>ARM64</PlatformTarget>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TieredCompilation>false</TieredCompilation>
@@ -31,7 +31,6 @@
     <PackageReference Include="MonoGame.Framework.Android" />
     <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="NVorbis" />
-    <PackageReference Include="Pathoschild.Http.FluentClient" />
     <PackageReference Include="Pintail" />
     <PackageReference Include="Platonymous.TMXTile" />
     <PackageReference Include="SkiaSharp" />
@@ -65,7 +64,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../SMAPI.Toolkit.CoreInterfaces/SMAPI.Toolkit.CoreInterfaces.csproj" />
-    <ProjectReference Include="../SMAPI.Toolkit/SMAPI.Toolkit.csproj" />
+    <ProjectReference Include="../SMAPI.Toolkit/SMAPI.Toolkit.csproj"
+                      AdditionalProperties="SmapiAndroidRuntime=true" />
   </ItemGroup>
 
   <ItemGroup>

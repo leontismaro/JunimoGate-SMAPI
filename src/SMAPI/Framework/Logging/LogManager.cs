@@ -296,10 +296,12 @@ internal class LogManager : IDisposable
             this.Monitor.Log("You enabled developer mode, so the console will be much more verbose. You can disable it by installing the non-developer version of SMAPI.", LogLevel.Info);
 
         // warnings
+#if !SMAPI_FOR_ANDROID
         if (!settings.CheckForUpdates)
             this.Monitor.Log("You disabled update checks, so you won't be notified of new SMAPI or mod updates. Running an old version of SMAPI is not recommended. You can undo this by reinstalling SMAPI.", LogLevel.Warn);
         if (!settings.CheckForBlacklistUpdates)
             this.Monitor.Log("You disabled mod blacklist updates, so you may not be protected from known malicious mods. You can undo this by reinstalling SMAPI.", LogLevel.Warn);
+#endif
         if (!settings.RewriteMods)
             this.Monitor.Log("You disabled rewriting broken mods, so many older mods may fail to load. You can undo this by reinstalling SMAPI.", LogLevel.Info);
 

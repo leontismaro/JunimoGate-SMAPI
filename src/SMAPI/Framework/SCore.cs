@@ -18,7 +18,9 @@ using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Win32;
 #endif
 using Newtonsoft.Json;
+#if !SMAPI_FOR_ANDROID
 using Pathoschild.Http.Client;
+#endif
 using StardewModdingAPI.Enums;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Framework.Content;
@@ -1877,6 +1879,7 @@ internal class SCore : IDisposable
 #endif
     }
 
+#if !SMAPI_FOR_ANDROID
     /// <summary>Asynchronously check for a new version of SMAPI, installed mods, or the 'malicious mods' blacklist.</summary>
     /// <param name="mods">The mods to include in update checks (if eligible).</param>
     private async Task CheckForUpdatesAsync(IModMetadata[] mods)
@@ -2070,6 +2073,7 @@ internal class SCore : IDisposable
             }
         }
     }
+#endif
 
     /// <summary>Verify the game's content files and log a warning if any are missing or modified.</summary>
     public void LogContentIntegrityIssues()
