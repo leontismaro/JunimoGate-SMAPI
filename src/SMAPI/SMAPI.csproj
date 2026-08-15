@@ -8,7 +8,7 @@
     <Version>4.5.2</Version>
     <AssemblyVersion>4.5.2.0</AssemblyVersion>
     <FileVersion>4.5.2.0</FileVersion>
-    <InformationalVersion>4.5.2-junimogate.40</InformationalVersion>
+    <InformationalVersion>4.5.2-junimogate.41</InformationalVersion>
     <PlatformTarget>ARM64</PlatformTarget>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TieredCompilation>false</TieredCompilation>
