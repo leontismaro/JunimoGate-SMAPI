@@ -880,6 +880,9 @@ internal class SCore : IDisposable
             // user from doing anything on the overnight shipping screen.
 
             SInputState inputState = instance.Input;
+#if SMAPI_FOR_ANDROID
+            inputState.BeginFrame();
+#endif
             if (this.Game.IsActive)
                 inputState.TrueUpdate();
 
