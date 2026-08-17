@@ -10,13 +10,20 @@ namespace StardewModdingAPI.Mobile;
 internal sealed class AndroidMainThreadTaskQueue
 {
     private readonly ConcurrentQueue<WorkItem> pending = new();
+    private readonly Func<string?, IDisposable?>? trackWork;
     private int gameThreadId;
+
+    public AndroidMainThreadTaskQueue(Func<string?, IDisposable?>? trackWork = null)
+    {
+        this.trackWork = trackWork;
+    }
 
     public Task Enqueue(Action action, string? name = null)
     {
         ArgumentNullException.ThrowIfNull(action);
         if (Volatile.Read(ref this.gameThreadId) == Environment.CurrentManagedThreadId)
         {
+            IDisposable? tracking = this.TryBeginTracking(name);
             try
             {
                 action();
@@ -26,10 +33,20 @@ internal sealed class AndroidMainThreadTaskQueue
             {
                 return Task.FromException(exception);
             }
+            finally
+            {
+                TryDisposeTracking(tracking);
+            }
         }
 
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        return this.EnqueueDeferred(action, name);
+    }
+
+    /// <summary>Queue work for a later pump even when called from the game thread.</summary>
+    public Task EnqueueDeferred(Action action, string? name = null)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         this.pending.Enqueue(new WorkItem(action, name, completion));
         return completion.Task;
     }
@@ -54,6 +71,7 @@ internal sealed class AndroidMainThreadTaskQueue
         while (executed < maxItems && this.pending.TryDequeue(out WorkItem? work))
         {
             long workStartedAt = Stopwatch.GetTimestamp();
+            IDisposable? tracking = this.TryBeginTracking(work.Name);
             try
             {
                 work.Action();
@@ -65,6 +83,7 @@ internal sealed class AndroidMainThreadTaskQueue
             }
             finally
             {
+                TryDisposeTracking(tracking);
                 executed++;
                 onCompleted?.Invoke(work.Name, Stopwatch.GetElapsedTime(workStartedAt));
             }
@@ -82,6 +101,30 @@ internal sealed class AndroidMainThreadTaskQueue
         while (this.pending.TryDequeue(out WorkItem? work))
             work.Completion.TrySetException(reason);
         Volatile.Write(ref this.gameThreadId, 0);
+    }
+
+    private IDisposable? TryBeginTracking(string? name)
+    {
+        try
+        {
+            return this.trackWork?.Invoke(name);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TryDisposeTracking(IDisposable? tracking)
+    {
+        try
+        {
+            tracking?.Dispose();
+        }
+        catch
+        {
+            // Diagnostics must not affect queued work.
+        }
     }
 
     internal readonly record struct PumpResult(int ExecutedItems, TimeSpan Elapsed, bool HasPending);

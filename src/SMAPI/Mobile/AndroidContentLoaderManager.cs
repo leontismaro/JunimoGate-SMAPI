@@ -53,7 +53,9 @@ internal static class AndroidContentLoaderManager
 
         var currentLoaderEnumerator = SGame.LoadContentEnumerator
             ?? throw new InvalidOperationException("The game Content loader is unavailable.");
-        bool isLoadContentFinish = currentLoaderEnumerator.MoveNext() is false;
+        bool isLoadContentFinish;
+        using (AndroidRuntimeDiagnostics.Track("content-loader", "MoveNext"))
+            isLoadContentFinish = currentLoaderEnumerator.MoveNext() is false;
         if (isLoadContentFinish)
         {
             FinishedFirstLoadContent = true;
@@ -70,7 +72,8 @@ internal static class AndroidContentLoaderManager
             LoadState = LoadStateEnum.Loaded;
             SGame.LoadContentEnumerator = null;
             OnPrefix_AfterLoadContent();
-            AfterLoadContentMethod.Invoke(Game1.game1, null);
+            using (AndroidRuntimeDiagnostics.Track("content-loader", "AfterLoadContent"))
+                AfterLoadContentMethod.Invoke(Game1.game1, null);
             OnPostfix_AfterLoadContent();
         }
     }

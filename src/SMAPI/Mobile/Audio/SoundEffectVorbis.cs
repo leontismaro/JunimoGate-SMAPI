@@ -26,6 +26,7 @@ public class SoundEffectVorbis : SoundEffect
 
     static readonly FieldInfo _duration_FI = AccessTools.Field(typeof(SoundEffect), "_duration");
     static readonly MethodInfo Initialize_MI = AccessTools.Method(typeof(SoundEffect), "Initialize");
+    static readonly MethodInfo PlatformInitializePcm_MI = AccessTools.Method(typeof(SoundEffect), "PlatformInitializePcm");
 
     public static SoundEffectVorbis CreateFromFilePath(string soundFilePath)
     {
@@ -33,31 +34,49 @@ public class SoundEffectVorbis : SoundEffect
 
         var st = Stopwatch.StartNew();
         using FileStream stream = new FileStream(soundFilePath, FileMode.Open);
-        var soundEffect = AccessTools.CreateInstance<SoundEffectVorbis>();
-        Initialize_MI.Invoke(soundEffect, null);
-
         using (VorbisReader vorbis_reader = new VorbisReader(stream, closeOnDispose: true))
         {
-
             const int bytes_per_sample = 2;
-
-            float[] float_buffer = new float[vorbis_reader.TotalSamples * vorbis_reader.Channels];
+            int sampleCount = checked((int)(vorbis_reader.TotalSamples * vorbis_reader.Channels));
+            int chunkSize = Math.Min(sampleCount, 16 * 1024);
+            float[] float_buffer = new float[chunkSize];
             short[] cast_buffer = new short[float_buffer.Length];
-            byte[] xna_buffer = new byte[float_buffer.Length * bytes_per_sample];
-            int read_samples = vorbis_reader.ReadSamples(float_buffer, 0, float_buffer.Length);
-            OggStream.CastBuffer(float_buffer, cast_buffer, read_samples);
-            Buffer.BlockCopy(cast_buffer, 0, xna_buffer, 0, read_samples * bytes_per_sample);
-            _duration_FI.SetValue(soundEffect, vorbis_reader.TotalTime);
-            var PlatformInitializePcm = AccessTools.Method(typeof(SoundEffect), "PlatformInitializePcm");
-            PlatformInitializePcm.Invoke(soundEffect, [
-                xna_buffer, 0, xna_buffer.Length, 16,
-                    vorbis_reader.SampleRate,
-                    (AudioChannels)vorbis_reader.Channels, 0,
-                    (int)vorbis_reader.TotalSamples
-            ]);
-        }
+            byte[] xna_buffer = new byte[checked(sampleCount * bytes_per_sample)];
+            int read_samples = 0;
+            while (read_samples < sampleCount)
+            {
+                int currentCount = vorbis_reader.ReadSamples(
+                    float_buffer,
+                    0,
+                    Math.Min(float_buffer.Length, sampleCount - read_samples));
+                if (currentCount == 0)
+                    break;
 
-        Console.WriteLine($"created SoundEffect: {soundEffect} in {st.Elapsed.TotalSeconds}s");
-        return soundEffect;
+                OggStream.CastBuffer(float_buffer, cast_buffer, currentCount);
+                Buffer.BlockCopy(
+                    cast_buffer,
+                    0,
+                    xna_buffer,
+                    checked(read_samples * bytes_per_sample),
+                    checked(currentCount * bytes_per_sample));
+                read_samples += currentCount;
+            }
+
+            if (read_samples != sampleCount)
+                Array.Resize(ref xna_buffer, checked(read_samples * bytes_per_sample));
+
+            var soundEffect = AccessTools.CreateInstance<SoundEffectVorbis>();
+            Initialize_MI.Invoke(soundEffect, null);
+            _duration_FI.SetValue(soundEffect, vorbis_reader.TotalTime);
+            PlatformInitializePcm_MI.Invoke(soundEffect, [
+                xna_buffer, 0, xna_buffer.Length, 16,
+                vorbis_reader.SampleRate,
+                (AudioChannels)vorbis_reader.Channels, 0,
+                read_samples / vorbis_reader.Channels
+            ]);
+
+            Console.WriteLine($"created SoundEffect: {soundEffect} in {st.Elapsed.TotalSeconds}s");
+            return soundEffect;
+        }
     }
 }

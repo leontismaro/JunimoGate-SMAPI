@@ -109,6 +109,11 @@ internal class ManagedEvent<TEventArgs> : IManagedEvent
 
             try
             {
+                using AndroidRuntimeDiagnostics.OperationScope diagnostics = AndroidRuntimeDiagnostics.Track(
+                    "managed-event",
+                    this.EventName,
+                    handler.SourceMod.Manifest.UniqueID,
+                    handler.Handler.Method);
                 handler.Handler(null, args);
             }
             catch (Exception ex)
@@ -137,6 +142,11 @@ internal class ManagedEvent<TEventArgs> : IManagedEvent
 
             try
             {
+                using AndroidRuntimeDiagnostics.OperationScope diagnostics = AndroidRuntimeDiagnostics.Track(
+                    "managed-event",
+                    this.EventName,
+                    handler.SourceMod.Manifest.UniqueID,
+                    handler.Handler.Method);
                 invoke(handler.SourceMod, args => handler.Handler(null, args));
             }
             catch (Exception ex)

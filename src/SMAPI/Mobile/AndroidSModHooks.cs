@@ -14,11 +14,13 @@ internal static class AndroidSModHooks
 {
     static IMonitor Monitor => SCore.Instance.SMAPIMonitor;
     private static readonly AndroidBackgroundTaskTracker BackgroundTasks = new();
-    private static readonly AndroidMainThreadTaskQueue MainThreadTasks = new();
+    private static readonly AndroidMainThreadTaskQueue MainThreadTasks = new(
+        name => AndroidRuntimeDiagnostics.Track("main-thread-task", name ?? "<unnamed>"));
     private static readonly TimeSpan MainThreadBudget = TimeSpan.FromMilliseconds(32);
 
     internal static void Init()
     {
+        AndroidRuntimeDiagnostics.Start(Monitor);
         MainThreadTasks.Reset();
         AndroidGameLoopManager.RegisterOnGameUpdating(OnGameUpdating_TaskUpdate);
     }
@@ -36,6 +38,9 @@ internal static class AndroidSModHooks
     }
     internal static Task AddTaskRunOnMainThread(Action callback, string? name = null)
         => MainThreadTasks.Enqueue(callback, name);
+
+    internal static Task AddTaskRunOnMainThreadDeferred(Action callback, string? name = null)
+        => MainThreadTasks.EnqueueDeferred(callback, name);
 
     internal static AndroidMainThreadTaskQueue.PumpResult PumpMainThreadTasks()
     {

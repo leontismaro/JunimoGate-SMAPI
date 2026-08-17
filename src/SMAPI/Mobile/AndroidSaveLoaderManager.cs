@@ -21,7 +21,8 @@ internal static class AndroidSaveLoaderManager
     //run Save.currentLoader.NextMove() within main game updating
     static bool OnGameUpdating_AndroidSaveLoader(GameTime gameTime)
     {
-        Game1.game1.UpdateTitleScreenDuringLoadingMode();
+        using (AndroidRuntimeDiagnostics.Track("save-loader", "UpdateTitleScreenDuringLoadingMode"))
+            Game1.game1.UpdateTitleScreenDuringLoadingMode();
         var score = SCore.Instance;
 
         // raise load stage changed
