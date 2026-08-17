@@ -3,8 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Audio;
@@ -56,22 +54,25 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         try
         {
             if (this.cueModificationData.Count == 0)
+            {
+                this.loadStage = LoadStage.Loaded;
                 return;
+            }
 
-            //starting
+            this.cueLoadedDict.Clear();
             this.loadStage = LoadStage.Loading;
             AndroidModLoaderManager.StartLoggerToScreen();
             AndroidGameLoopManager.RegisterOnGameUpdating(this.OnGameUpdating);
 
-            foreach (string key in this.cueModificationData.Keys)
-            {
-                var item = this.cueModificationData[key];
-                //TODO
-                AndroidSModHooks.AddTaskRunOnMainThread(() =>
-                {
-                    this.ApplyCueModification(key);
-                }, $"Apply CueModify key: {key}, filePath[0]: {item.FilePaths.FirstOrDefault()}");
-            }
+            CueLoadPlan[] plans = this.cueModificationData
+                .Select(pair => new CueLoadPlan(
+                    pair.Key,
+                    pair.Value.StreamedVorbis,
+                    pair.Value.FilePaths?.Select(this.GetFilePath).ToArray() ?? []))
+                .ToArray();
+            AndroidSModHooks.StartTaskBackground(
+                () => this.LoadCueModificationsInBackground(plans),
+                "Decode Android audio cue modifications");
 
         }
         catch (Exception ex)
@@ -84,6 +85,7 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         bool isLoaded = this.cueLoadedDict.Count == this.cueModificationData.Count;
         if (isLoaded)
         {
+            this.loadStage = LoadStage.Loaded;
             AndroidGameLoopManager.UnregisterOnGameUpdating(this.OnGameUpdating);
             AndroidModLoaderManager.StopLoggerToScreen();
 
@@ -93,17 +95,108 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         return true;
     }
 
-    ConcurrentDictionary<string, CueDefinition> cueLoadedDict = new();
+    private readonly ConcurrentDictionary<string, byte> cueLoadedDict = new();
 
     public override void ApplyCueModification(string key)
+    {
+        if (!this.cueModificationData.TryGetValue(key, out var modificationData))
+            return;
+
+        try
+        {
+            var effects = new List<SoundEffect>();
+            foreach (string sourcePath in modificationData.FilePaths ?? [])
+            {
+                string filePath = this.GetFilePath(sourcePath);
+                try
+                {
+                    effects.Add(this.LoadSoundSynchronously(filePath, modificationData.StreamedVorbis));
+                }
+                catch (Exception exception)
+                {
+                    this.LogSoundLoadError(filePath, exception);
+                }
+            }
+
+            this.ApplyPreparedCueModification(key, effects.ToArray());
+        }
+        finally
+        {
+            this.MarkCueCompleted(key);
+        }
+    }
+
+    private void LoadCueModificationsInBackground(CueLoadPlan[] plans)
+    {
+        foreach (CueLoadPlan plan in plans)
+        {
+            var effects = new List<SoundEffect>();
+            try
+            {
+                foreach (string filePath in plan.FilePaths)
+                {
+                    try
+                    {
+                        SoundEffect effect;
+                        bool vorbis = Path.GetExtension(filePath).EqualsIgnoreCase(".ogg");
+                        if (vorbis && !plan.StreamedVorbis)
+                        {
+                            SoundEffectVorbis.DecodedSound decoded = SoundEffectVorbis.DecodeFromFilePath(filePath);
+                            SoundEffect? published = null;
+                            AndroidMainThread.InvokeOnMainThread(
+                                () => published = SoundEffectVorbis.CreateFromDecoded(decoded),
+                                $"Publish decoded audio: {Path.GetFileName(filePath)}");
+                            effect = published ?? throw new InvalidOperationException("The decoded Android sound was not published.");
+                        }
+                        else
+                        {
+                            SoundEffect? published = null;
+                            AndroidMainThread.InvokeOnMainThread(
+                                () => published = this.LoadSoundSynchronously(filePath, plan.StreamedVorbis),
+                                $"Load audio: {Path.GetFileName(filePath)}");
+                            effect = published ?? throw new InvalidOperationException("The Android sound was not loaded.");
+                        }
+
+                        effects.Add(effect);
+                    }
+                    catch (Exception exception)
+                    {
+                        this.LogSoundLoadError(filePath, exception);
+                    }
+                }
+
+                AndroidMainThread.InvokeOnMainThread(
+                    () =>
+                    {
+                        this.ApplyPreparedCueModification(plan.Key, effects.ToArray());
+                        this.MarkCueCompleted(plan.Key);
+                    },
+                    $"Apply audio cue: {plan.Key}");
+            }
+            catch (Exception exception)
+            {
+                this.monitor.Log($"Failed loading Android audio cue '{plan.Key}': {exception.GetLogSummary()}", LogLevel.Error);
+            }
+        }
+    }
+
+    private SoundEffect LoadSoundSynchronously(string filePath, bool streamedVorbis)
+    {
+        bool vorbis = Path.GetExtension(filePath).EqualsIgnoreCase(".ogg");
+        if (vorbis && streamedVorbis)
+            return OggStreamSoundEffect.CreateOggStreamFromFileName(filePath);
+        if (vorbis)
+            return SoundEffectVorbis.CreateFromFilePath(filePath);
+        return SoundEffect.FromFile(filePath);
+    }
+
+    private void ApplyPreparedCueModification(string key, SoundEffect[] effects)
     {
         try
         {
             var cueModificationData = this.cueModificationData;
             if (!cueModificationData.TryGetValue(key, out var modification_data))
-            {
                 return;
-            }
 
             bool is_modification = false;
             int category_index = Game1.audioEngine.IAudioEngine_GetCategoryIndex("Default");
@@ -127,43 +220,6 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
             }
             if (modification_data.FilePaths != null)
             {
-                SoundEffect[] effects = new SoundEffect[modification_data.FilePaths.Count];
-                for (int i = 0; i < modification_data.FilePaths.Count; i++)
-                {
-                    string file_path = this.GetFilePath(modification_data.FilePaths[i]);
-                    bool vorbis = Path.GetExtension(file_path).EqualsIgnoreCase(".ogg");
-                    int invalid_sounds = 0;
-                    try
-                    {
-                        SoundEffect sound_effect;
-                        //.ogg file & streaming
-                        if (vorbis && modification_data.StreamedVorbis)
-                        {
-                            sound_effect = OggStreamSoundEffect.CreateOggStreamFromFileName(file_path);
-                        }
-                        //.ogg file
-                        else if (vorbis)
-                        {
-                            sound_effect = SoundEffectVorbis.CreateFromFilePath(file_path);
-                        }
-                        //general file such as .wav
-                        else
-                        {
-                            sound_effect = SoundEffect.FromFile(file_path);
-                        }
-
-                        effects[i - invalid_sounds] = sound_effect;
-                    }
-                    catch (Exception e)
-                    {
-                        Game1.log.Error("Error loading sound: " + file_path, e);
-                        invalid_sounds++;
-                    }
-                    if (invalid_sounds > 0)
-                    {
-                        Array.Resize(ref effects, effects.Length - invalid_sounds);
-                    }
-                }
                 cue_definition.SetSound(effects, category_index, modification_data.Looped, modification_data.UseReverb);
                 if (is_modification)
                 {
@@ -171,8 +227,6 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
                 }
             }
             soundBank.AddCue(cue_definition);
-            //successfully
-            this.cueLoadedDict.TryAdd(key, cue_definition);
         }
         catch (NoAudioHardwareException)
         {
@@ -183,4 +237,12 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
             this.monitor.Log(ex.ToString(), LogLevel.Error);
         }
     }
+
+    private void MarkCueCompleted(string key)
+        => this.cueLoadedDict.TryAdd(key, 0);
+
+    private void LogSoundLoadError(string filePath, Exception exception)
+        => this.monitor.Log($"Error loading sound '{filePath}': {exception.GetLogSummary()}", LogLevel.Error);
+
+    private sealed record CueLoadPlan(string Key, bool StreamedVorbis, string[] FilePaths);
 }
