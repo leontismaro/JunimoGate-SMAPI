@@ -30,6 +30,12 @@ public class SoundEffectVorbis : SoundEffect
 
     public static SoundEffectVorbis CreateFromFilePath(string soundFilePath)
     {
+        DecodedSound decoded = DecodeFromFilePath(soundFilePath);
+        return CreateFromDecoded(decoded);
+    }
+
+    internal static DecodedSound DecodeFromFilePath(string soundFilePath)
+    {
         Console.WriteLine("starting load sound vorbis: " + soundFilePath);
 
         var st = Stopwatch.StartNew();
@@ -65,18 +71,32 @@ public class SoundEffectVorbis : SoundEffect
             if (read_samples != sampleCount)
                 Array.Resize(ref xna_buffer, checked(read_samples * bytes_per_sample));
 
-            var soundEffect = AccessTools.CreateInstance<SoundEffectVorbis>();
-            Initialize_MI.Invoke(soundEffect, null);
-            _duration_FI.SetValue(soundEffect, vorbis_reader.TotalTime);
-            PlatformInitializePcm_MI.Invoke(soundEffect, [
-                xna_buffer, 0, xna_buffer.Length, 16,
+            Console.WriteLine($"decoded Vorbis sound in {st.Elapsed.TotalSeconds}s");
+            return new DecodedSound(
+                xna_buffer,
                 vorbis_reader.SampleRate,
-                (AudioChannels)vorbis_reader.Channels, 0,
-                read_samples / vorbis_reader.Channels
-            ]);
-
-            Console.WriteLine($"created SoundEffect: {soundEffect} in {st.Elapsed.TotalSeconds}s");
-            return soundEffect;
+                (AudioChannels)vorbis_reader.Channels,
+                vorbis_reader.TotalTime,
+                read_samples / vorbis_reader.Channels);
         }
     }
+
+    internal static SoundEffectVorbis CreateFromDecoded(DecodedSound decoded)
+    {
+        var soundEffect = AccessTools.CreateInstance<SoundEffectVorbis>();
+        Initialize_MI.Invoke(soundEffect, null);
+        _duration_FI.SetValue(soundEffect, decoded.Duration);
+        PlatformInitializePcm_MI.Invoke(soundEffect, [
+            decoded.Buffer, 0, decoded.Buffer.Length, 16,
+            decoded.SampleRate, decoded.Channels, 0, decoded.TotalSamples
+        ]);
+        return soundEffect;
+    }
+
+    internal readonly record struct DecodedSound(
+        byte[] Buffer,
+        int SampleRate,
+        AudioChannels Channels,
+        TimeSpan Duration,
+        int TotalSamples);
 }

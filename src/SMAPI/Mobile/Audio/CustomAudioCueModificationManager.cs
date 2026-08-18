@@ -43,6 +43,7 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
     }
 
     public LoadStage loadStage = LoadStage.None;
+    internal bool IsReady => this.loadStage != LoadStage.Loading || Volatile.Read(ref this.pendingCueCount) == 0;
     private readonly Dictionary<string, CueIdentity> appliedCueIdentities = new(StringComparer.Ordinal);
     private int loadGeneration;
     private int pendingCueCount;
@@ -75,14 +76,14 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
                 AndroidGameLoopManager.RegisterOnGameUpdating(this.OnGameUpdating);
             }
 
-            foreach (string key in this.cueModificationData.Keys)
+            var plans = new List<CueLoadPlan>();
+            foreach ((string key, var modification) in this.cueModificationData)
             {
                 try
                 {
-                    var item = this.cueModificationData[key];
                     string filesIdentity = string.Join(
                         "\0",
-                        (item.FilePaths ?? [])
+                        (modification.FilePaths ?? [])
                             .Select(this.GetFilePath)
                             .Select(path =>
                             {
@@ -92,27 +93,44 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
                                     : $"{path}\0<missing>";
                             }));
                     CueIdentity identity = new(
-                        item.Id,
-                        item.Category,
-                        item.Looped,
-                        item.UseReverb,
-                        item.StreamedVorbis,
+                        modification.Id,
+                        modification.Category,
+                        modification.Looped,
+                        modification.UseReverb,
+                        modification.StreamedVorbis,
                         filesIdentity);
-                    if (this.CanReuseCue(key, item.Id, identity))
+                    if (this.CanReuseCue(key, modification.Id, identity))
                     {
                         this.MarkCueCompleted(key, generation);
                         continue;
                     }
 
-                    _ = AndroidSModHooks.AddTaskRunOnMainThreadDeferred(
-                        () => this.ApplyQueuedCueModification(key, identity, generation),
-                        $"Apply audio cue: {key}");
+                    plans.Add(new CueLoadPlan(
+                        key,
+                        modification.StreamedVorbis,
+                        modification.FilePaths?.Select(this.GetFilePath).ToArray() ?? [],
+                        identity));
                 }
                 catch (Exception exception)
                 {
                     this.monitor.Log($"Failed planning Android audio cue '{key}': {exception.GetLogSummary()}", LogLevel.Error);
                     this.MarkCueCompleted(key, generation);
                 }
+            }
+
+            if (plans.Count == 0)
+                return;
+
+            try
+            {
+                AndroidSModHooks.StartTaskBackgroundNonBlocking(
+                    () => this.LoadCueModificationsInBackground(plans.ToArray(), generation),
+                    "Decode Android audio cue modifications");
+            }
+            catch
+            {
+                this.CompleteGeneration(generation);
+                throw;
             }
         }
         catch (Exception ex)
@@ -132,7 +150,10 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
             return false;
         }
 
-        return true;
+        // Audio preparation is a dependency for save loading, but not for title
+        // animation or input. Keep the completion callback for lifecycle cleanup
+        // without turning the whole game update into a 40-second barrier.
+        return false;
     }
 
     public override void ApplyCueModification(string key)
@@ -141,19 +162,137 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         _ = this.TryApplyCueModification(key, out _);
     }
 
-    private void ApplyQueuedCueModification(string key, CueIdentity identity, int generation)
+    private void LoadCueModificationsInBackground(CueLoadPlan[] plans, int generation)
     {
-        if (generation != Volatile.Read(ref this.loadGeneration))
-            return;
-
         try
         {
-            if (this.TryApplyCueModification(key, out CueDefinition? cueDefinition))
-                this.appliedCueIdentities[key] = identity;
+            foreach (CueLoadPlan plan in plans)
+            {
+                if (generation != Volatile.Read(ref this.loadGeneration))
+                    return;
+
+                var effects = new List<SoundEffect>();
+                bool applied = false;
+                try
+                {
+                    foreach (string filePath in plan.FilePaths)
+                    {
+                        try
+                        {
+                            if (Path.GetExtension(filePath).Equals(".ogg", StringComparison.OrdinalIgnoreCase)
+                                && !plan.StreamedVorbis)
+                            {
+                                SoundEffectVorbis.DecodedSound decoded = SoundEffectVorbis.DecodeFromFilePath(filePath);
+                                SoundEffect? published = null;
+                                AndroidSModHooks.AddAudioTaskRunOnMainThreadDeferred(
+                                    () => published = SoundEffectVorbis.CreateFromDecoded(decoded),
+                                    $"Publish decoded audio: {Path.GetFileName(filePath)}")
+                                    .GetAwaiter().GetResult();
+                                effects.Add(published ?? throw new InvalidOperationException("Decoded audio was not published."));
+                            }
+                            else
+                            {
+                                SoundEffect? loaded = null;
+                                AndroidSModHooks.AddAudioTaskRunOnMainThreadDeferred(
+                                    () => loaded = this.LoadSoundSynchronously(filePath, plan.StreamedVorbis),
+                                    $"Load audio: {Path.GetFileName(filePath)}")
+                                    .GetAwaiter().GetResult();
+                                effects.Add(loaded ?? throw new InvalidOperationException("Audio was not loaded."));
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            this.LogSoundLoadError(filePath, exception);
+                        }
+                    }
+
+                    AndroidSModHooks.AddAudioTaskRunOnMainThreadDeferred(
+                        () =>
+                        {
+                            if (generation != Volatile.Read(ref this.loadGeneration))
+                            {
+                                foreach (SoundEffect effect in effects)
+                                    effect.Dispose();
+                                return;
+                            }
+                            applied = this.TryApplyPreparedCueModification(plan.Key, effects.ToArray());
+                            if (applied)
+                                this.appliedCueIdentities[plan.Key] = plan.Identity;
+                            else
+                            {
+                                foreach (SoundEffect effect in effects)
+                                    effect.Dispose();
+                            }
+                        },
+                        $"Apply audio cue: {plan.Key}")
+                        .GetAwaiter().GetResult();
+                }
+                catch (Exception exception)
+                {
+                    this.monitor.Log($"Failed loading Android audio cue '{plan.Key}': {exception.GetLogSummary()}", LogLevel.Error);
+                }
+                finally
+                {
+                    this.MarkCueCompleted(plan.Key, generation);
+                }
+            }
         }
         finally
         {
-            this.MarkCueCompleted(key, generation);
+            this.CompleteGeneration(generation);
+        }
+    }
+
+    private SoundEffect LoadSoundSynchronously(string filePath, bool streamedVorbis)
+    {
+        bool vorbis = Path.GetExtension(filePath).Equals(".ogg", StringComparison.OrdinalIgnoreCase);
+        if (vorbis && streamedVorbis)
+            return OggStreamSoundEffect.CreateOggStreamFromFileName(filePath);
+        if (vorbis)
+            return SoundEffectVorbis.CreateFromFilePath(filePath);
+        return SoundEffect.FromFile(filePath);
+    }
+
+    private bool TryApplyPreparedCueModification(string key, SoundEffect[] effects)
+    {
+        if (!this.cueModificationData.TryGetValue(key, out var modificationData))
+            return false;
+
+        try
+        {
+            bool isModification = false;
+            int categoryIndex = Game1.audioEngine.IAudioEngine_GetCategoryIndex("Default");
+            var soundBank = ((SoundBankWrapper)Game1.soundBank).GetSoundBank();
+            CueDefinition cueDefinition;
+            if (soundBank.Exists(modificationData.Id))
+            {
+                cueDefinition = soundBank.GetCueDefinition(modificationData.Id);
+                isModification = true;
+            }
+            else
+            {
+                cueDefinition = new CueDefinition { name = modificationData.Id };
+            }
+            if (modificationData.Category is not null)
+                categoryIndex = Game1.audioEngine.IAudioEngine_GetCategoryIndex(modificationData.Category);
+            if (modificationData.FilePaths is not null)
+            {
+                cueDefinition.SetSound(effects, categoryIndex, modificationData.Looped, modificationData.UseReverb);
+                if (isModification)
+                    cueDefinition.OnModified?.Invoke();
+            }
+            soundBank.AddCue(cueDefinition);
+            return true;
+        }
+        catch (NoAudioHardwareException)
+        {
+            Game1.log.Warn($"Can't apply modifications for audio cue '{key}' because there's no audio hardware available.");
+            return false;
+        }
+        catch (Exception exception)
+        {
+            this.monitor.Log(exception.ToString(), LogLevel.Error);
+            return false;
         }
     }
 
@@ -256,6 +395,9 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         return soundBankWrapper.GetSoundBank().Exists(cueId);
     }
 
+    private void LogSoundLoadError(string filePath, Exception exception)
+        => this.monitor.Log($"Error loading sound '{filePath}': {exception.GetLogSummary()}", LogLevel.Error);
+
     private void MarkCueCompleted(string key, int generation)
     {
         if (generation != Volatile.Read(ref this.loadGeneration))
@@ -264,6 +406,18 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         if (Interlocked.Decrement(ref this.pendingCueCount) < 0)
             Volatile.Write(ref this.pendingCueCount, 0);
     }
+
+    private void CompleteGeneration(int generation)
+    {
+        if (generation == Volatile.Read(ref this.loadGeneration))
+            Volatile.Write(ref this.pendingCueCount, 0);
+    }
+
+    private sealed record CueLoadPlan(
+        string Key,
+        bool StreamedVorbis,
+        string[] FilePaths,
+        CueIdentity Identity);
 
     private sealed record CueIdentity(
         string Id,

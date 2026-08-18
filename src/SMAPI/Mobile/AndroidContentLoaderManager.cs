@@ -5,6 +5,7 @@ using StardewModdingAPI.Framework;
 using StardewModdingAPI.Mobile.Audio;
 using StardewValley;
 using StardewValley.Audio;
+using StardewValley.Menus;
 
 namespace StardewModdingAPI.Mobile;
 
@@ -80,6 +81,11 @@ internal static class AndroidContentLoaderManager
     static void OnSetupFirstTick()
     {
         LoadState = LoadStateEnum.Loading;
+
+        // Large Mod sets can block the Android game loop during their first update.
+        // Use the game's own startup latch so that this session enters the title menu
+        // directly instead of exposing a blank splash frame behind the loading overlay.
+        TitleMenu.SkipSplashScreens = true;
 
         //change AudioCueModificationManager
         //debug

@@ -13,6 +13,8 @@ internal sealed class AndroidMainThreadTaskQueue
     private readonly Func<string?, IDisposable?>? trackWork;
     private int gameThreadId;
 
+    internal bool HasPending => !this.pending.IsEmpty;
+
     public AndroidMainThreadTaskQueue(Func<string?, IDisposable?>? trackWork = null)
     {
         this.trackWork = trackWork;
