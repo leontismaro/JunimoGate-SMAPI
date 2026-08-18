@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -120,7 +119,7 @@ public sealed class SmapiSession : IDisposable
         if (Interlocked.Exchange(ref started, 1) != 0) throw new InvalidOperationException("SMAPI session can only run once.");
         try
         {
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture; // per StardewValley.Program.Main
+            AndroidCulturePolicy.ApplyInvariantDataCulture();
             AndroidHostServices.Configure(options);
             Mobile.AndroidRuntimeBootstrap.InitializeProcess();
             StardewValley.Mobile.MobileDisplay.SetupDisplaySettings();

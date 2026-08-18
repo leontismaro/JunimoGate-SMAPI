@@ -36,10 +36,12 @@ internal class Program
     public static void Main(string[] args)
     {
 #if SMAPI_FOR_ANDROID
+        AndroidCulturePolicy.ApplyInvariantDataCulture();
         AndroidRuntimeBootstrap.InitializeProcess();
         AndroidMainThread.Init(args);
-#endif
+#else
         Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture; // per StardewValley.Program.Main
+#endif
 #if !SMAPI_FOR_ANDROID
         Console.Title = $"SMAPI {EarlyConstants.RawApiVersion}";
 #endif
