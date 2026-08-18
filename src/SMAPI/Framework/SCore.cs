@@ -164,6 +164,11 @@ internal class SCore : IDisposable
     /// <summary>The maximum number of consecutive attempts SMAPI should make to recover from an update error.</summary>
     private readonly Countdown UpdateCrashTimer = new(60); // 60 ticks = roughly one second
 
+#if SMAPI_FOR_ANDROID
+    /// <summary>Tracks consecutive Android update failures without flooding the bounded log.</summary>
+    private readonly AndroidUpdateFailureTracker AndroidUpdateFailures = new();
+#endif
+
     /// <summary>A list of queued commands to parse and execute.</summary>
     private readonly CommandQueue RawCommandQueue = new();
 
@@ -805,6 +810,12 @@ internal class SCore : IDisposable
             *********/
             runGameUpdate();
 
+#if SMAPI_FOR_ANDROID
+            int recoveredFailures = this.AndroidUpdateFailures.Reset();
+            if (recoveredFailures > 0)
+                this.Monitor.Log($"The Android game update recovered after {recoveredFailures} consecutive failure(s).", LogLevel.Warn);
+#endif
+
             /*********
             ** Reset crash timer
             *********/
@@ -813,11 +824,29 @@ internal class SCore : IDisposable
         catch (Exception ex)
         {
             // log error
+#if SMAPI_FOR_ANDROID
+            Exception failure = ex is BaseGameUpdateException { InnerException: { } innerException }
+                ? innerException
+                : ex;
+            AndroidUpdateFailureTracker.FailureObservation observation = this.AndroidUpdateFailures.RecordFailure();
+            if (observation.ShouldLogDetails)
+                this.Monitor.Log($"An error occurred in the game update loop: {failure.GetLogSummary()}", LogLevel.Error);
+            else if (observation.ShouldLogSuppressionNotice)
+                this.Monitor.Log("The Android game update is still failing; repeated stack traces will be suppressed until it recovers or stops.", LogLevel.Error);
+#else
             this.Monitor.Log($"An error occurred in the overridden update loop: {ex.GetLogSummary()}", LogLevel.Error);
+#endif
 
             // exit if irrecoverable
             if (!this.UpdateCrashTimer.Decrement())
+#if SMAPI_FOR_ANDROID
+                this.ExitGameImmediately(
+                    "The game crashed when updating, and SMAPI was unable to recover the game.",
+                    ex is BaseGameUpdateException ? "base_update_failed" : "game_update_failed",
+                    failure);
+#else
                 this.ExitGameImmediately("The game crashed when updating, and SMAPI was unable to recover the game.");
+#endif
         }
         finally
         {
@@ -880,6 +909,9 @@ internal class SCore : IDisposable
             // user from doing anything on the overnight shipping screen.
 
             SInputState inputState = instance.Input;
+#if SMAPI_FOR_ANDROID
+            inputState.BeginFrame();
+#endif
             if (this.Game.IsActive)
                 inputState.TrueUpdate();
 
@@ -1345,7 +1377,11 @@ internal class SCore : IDisposable
                 }
                 catch (Exception ex)
                 {
+#if SMAPI_FOR_ANDROID
+                    throw new BaseGameUpdateException(ex);
+#else
                     this.LogManager.MonitorForGame.Log($"An error occurred in the base update loop: {ex.GetLogSummary()}", LogLevel.Error);
+#endif
                 }
 
                 events.UnvalidatedUpdateTicked.RaiseEmpty();
@@ -1359,6 +1395,12 @@ internal class SCore : IDisposable
             *********/
             this.UpdateCrashTimer.Reset();
         }
+#if SMAPI_FOR_ANDROID
+        catch (BaseGameUpdateException)
+        {
+            throw;
+        }
+#endif
         catch (Exception ex)
         {
             // log error
@@ -2855,10 +2897,21 @@ internal class SCore : IDisposable
     /// <param name="message">The fatal log message.</param>
     private void ExitGameImmediately(string message)
     {
+        this.ExitGameImmediately(message, "game_loop_failed", exception: null);
+    }
+
+    /// <summary>Immediately stop the Android game and report the terminal failure to its host.</summary>
+    private void ExitGameImmediately(string message, string failureCode, Exception? exception)
+    {
+        if (this.ExitState == ExitState.Crash)
+            return;
         this.Monitor.LogFatal(message);
         this.LogManager.WriteCrashLog();
 
         this.ExitState = ExitState.Crash;
+#if SMAPI_FOR_ANDROID
+        AndroidHostServices.Options?.ReportFailure(new SmapiFailure(failureCode, message, exception));
+#endif
         this.Game.Exit();
     }
 
@@ -2875,6 +2928,11 @@ internal class SCore : IDisposable
     /*********
     ** Private types
     *********/
+#if SMAPI_FOR_ANDROID
+    private sealed class BaseGameUpdateException(Exception innerException)
+        : Exception("The base game update failed.", innerException);
+#endif
+
     /// <summary>A queued console command to run during the update loop.</summary>
     /// <param name="Command">The command which can handle the input.</param>
     /// <param name="Name">The parsed command name.</param>

@@ -174,19 +174,8 @@ internal class SGameRunner : GameRunner
     /// <param name="gameTime">A snapshot of the game timing state.</param>
     protected override void Update(GameTime gameTime)
     {
-        this.OnGameUpdating(gameTime, () =>
-        {
-            try
-            {
-                base.Update(gameTime);
-                //this.Update_Debug(gameTime);
-            }
-            catch (Exception err)
-            {
-                Console.WriteLine("error on SGameRuuner.Update: " + err);
-            }
-        }
-        );
+        using AndroidRuntimeDiagnostics.OperationScope diagnostics = AndroidRuntimeDiagnostics.Track("game-loop", "Update");
+        this.OnGameUpdating(gameTime, () => base.Update(gameTime));
     }
     void Update_Debug(GameTime gameTime)
     {
@@ -349,6 +338,7 @@ internal class SGameRunner : GameRunner
     public static event Action<GameTime>? _EventOnDraw;
     protected override void Draw(GameTime time)
     {
+        using AndroidRuntimeDiagnostics.OperationScope diagnostics = AndroidRuntimeDiagnostics.Track("game-loop", "Draw");
         base.Draw(time);
 
         try
@@ -370,5 +360,6 @@ internal class SGameRunner : GameRunner
     {
         _EventOnDraw -= draw;
     }
+
 #endif
 }

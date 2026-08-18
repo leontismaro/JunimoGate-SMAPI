@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);SMAPI_FOR_ANDROID</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../SMAPI/Framework/Input/AndroidInputSnapshotGate.cs"
+             Link="Framework/Input/AndroidInputSnapshotGate.cs" />
+  </ItemGroup>
+</Project>
