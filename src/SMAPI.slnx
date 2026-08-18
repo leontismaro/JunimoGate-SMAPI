@@ -41,6 +41,7 @@
     <File Path="../docs/technical/web.md" />
   </Folder>
   <Folder Name="/Internal/">
+    <Project Path="SMAPI.AndroidInput.Tests/SMAPI.AndroidInput.Tests.csproj" />
     <Project Path="SMAPI.Internal/SMAPI.Internal.shproj" />
     <Project Path="SMAPI.ModBuildConfig.Analyzer.Tests/SMAPI.ModBuildConfig.Analyzer.Tests.csproj" />
     <Project Path="SMAPI.Tests.ModApiConsumer/SMAPI.Tests.ModApiConsumer.csproj" />

@@ -309,8 +309,8 @@ internal class SGame : Game1
         // set initial state
         if (this.IsFirstTick)
         {
-            this.Input.TrueUpdate();
 #if !SMAPI_FOR_ANDROID
+            this.Input.TrueUpdate();
             this.Watchers = new WatcherCore(this.Input, (ObservableCollection<GameLocation>)this._locations);
 #endif
         }

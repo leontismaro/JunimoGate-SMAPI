@@ -42,6 +42,11 @@ internal sealed class SInputState : InputState
     /// <summary>The builder which reads the mouse state and applies overrides.</summary>
     private readonly MouseStateBuilder MouseStateBuilder = new();
 
+#if SMAPI_FOR_ANDROID
+    /// <summary>Tracks the single physical input snapshot shared by SMAPI and the game each frame.</summary>
+    private readonly AndroidInputSnapshotGate AndroidSnapshotGate = new();
+#endif
+
 
     /*********
     ** Accessors
@@ -69,6 +74,21 @@ internal sealed class SInputState : InputState
     [Obsolete("This method should only be called by the game itself.")]
     public override void Update() { }
 
+#if SMAPI_FOR_ANDROID
+    /// <summary>Start a new Android input frame before SMAPI or the game samples input.</summary>
+    public void BeginFrame()
+    {
+        this.AndroidSnapshotGate.BeginFrame();
+    }
+
+    /// <summary>Update the game's Android input fields if they haven't been sampled this frame.</summary>
+    public override void UpdateStates()
+    {
+        if (this.AndroidSnapshotGate.TryBeginSampling())
+            base.UpdateStates();
+    }
+#endif
+
     /// <summary>Update the current button states for the given tick.</summary>
     public void TrueUpdate()
     {
@@ -76,10 +96,9 @@ internal sealed class SInputState : InputState
         base.Update();
 
 #if SMAPI_FOR_ANDROID
-        //it important
-        //because _currentTouchState it's need update  into _currentMouseState
-        //and _currentGamepadState too
-        base.UpdateStates();//Don't forget update Input State first
+        // Sample touch, keyboard, and gamepad before SMAPI raises input events. The game's
+        // UpdateStates call later in this frame reuses these fields through the override above.
+        this.UpdateStates();
 #endif
 
         // update SMAPI extended data
