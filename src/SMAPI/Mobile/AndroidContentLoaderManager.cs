@@ -36,20 +36,14 @@ internal static class AndroidContentLoaderManager
         get => ReadBoolean(FinishedFirstInitSoundsField);
         set => FinishedFirstInitSoundsField.SetValue(null, value);
     }
-    public static bool FinishedCustomLoadContent = false;
-    static int CallingTick = 0;
     internal static void Reset()
     {
-        CallingTick = 0;
-        FinishedCustomLoadContent = false;
         LoadState = LoadStateEnum.None;
     }
 
     public static void UpdateMoveNextLoadContent()
     {
-        CallingTick++;
-
-        if (CallingTick == 1)
+        if (LoadState == LoadStateEnum.None)
             OnSetupFirstTick();
 
         var currentLoaderEnumerator = SGame.LoadContentEnumerator
@@ -58,16 +52,10 @@ internal static class AndroidContentLoaderManager
         using (AndroidRuntimeDiagnostics.Track("content-loader", "MoveNext"))
             isLoadContentFinish = currentLoaderEnumerator.MoveNext() is false;
         if (isLoadContentFinish)
-        {
             FinishedFirstLoadContent = true;
-            //update additional content
-            //debug
-            FinishedCustomLoadContent = true;
-        }
-
 
         if (FinishedFirstLoadContent && FinishedFirstInitSounds
-            && FinishedFirstInitSerializers && FinishedCustomLoadContent)
+            && FinishedFirstInitSerializers)
         {
             FinishedIncrementalLoadField.SetValue(null, true);
             LoadState = LoadStateEnum.Loaded;

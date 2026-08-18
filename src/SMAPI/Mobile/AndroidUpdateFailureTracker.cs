@@ -1,9 +1,19 @@
+using System;
+
 namespace StardewModdingAPI.Mobile;
 
 /// <summary>Tracks consecutive Android game-loop failures and bounds repeated log detail.</summary>
 internal sealed class AndroidUpdateFailureTracker
 {
+    private const int DefaultMaxRecoverableFailures = 60;
+    private readonly int maxRecoverableFailures;
     private int count;
+
+    internal AndroidUpdateFailureTracker(int maxRecoverableFailures = DefaultMaxRecoverableFailures)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxRecoverableFailures);
+        this.maxRecoverableFailures = maxRecoverableFailures;
+    }
 
     internal FailureObservation RecordFailure()
     {
@@ -11,7 +21,8 @@ internal sealed class AndroidUpdateFailureTracker
         return new FailureObservation(
             current,
             ShouldLogDetails: current == 1,
-            ShouldLogSuppressionNotice: current == 2);
+            ShouldLogSuppressionNotice: current == 2,
+            ShouldTerminate: current > this.maxRecoverableFailures);
     }
 
     internal int Reset()
@@ -24,5 +35,6 @@ internal sealed class AndroidUpdateFailureTracker
     internal readonly record struct FailureObservation(
         int ConsecutiveFailures,
         bool ShouldLogDetails,
-        bool ShouldLogSuppressionNotice);
+        bool ShouldLogSuppressionNotice,
+        bool ShouldTerminate);
 }

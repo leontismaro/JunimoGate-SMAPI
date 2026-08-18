@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
@@ -12,6 +13,7 @@ namespace StardewModdingAPI.Mobile;
 
 internal static class AndroidModLoaderManager
 {
+    private static readonly object LoggerSync = new();
     static SpriteFont smallFont;
     static LocalizedContentManager content;
     private const int LoadingLogCapacity = 512;
@@ -43,36 +45,45 @@ internal static class AndroidModLoaderManager
         taskModEntry.GetAwaiter().GetResult();
     }
 
-    static int queueNumberShowLogger = 0;
-    static bool IsShowLogger => queueNumberShowLogger > 0;
+    static int activeLoggerLeases;
+    static bool IsShowLogger => Volatile.Read(ref activeLoggerLeases) > 0;
     static void ClearLogs() => LoadingLogs.Clear();
-    internal static void StartLoggerToScreen()
+    internal static IDisposable AcquireLoggerToScreen()
     {
         if (AndroidHostServices.Options?.ShowLoadingLogsOnScreen == false)
-            return;
+            return LoggerLease.Empty;
 
-        //initialize
-        if (content is null)
+        lock (LoggerSync)
         {
-            content = Game1.game1.CreateContentManager(Game1.content.ServiceProvider, Game1.content.RootDirectory);
-            smallFont = content.Load<SpriteFont>("Fonts\\SmallFont");
-            K_textLineHeight = smallFont.MeasureString("AAA").Y;
-            SGameRunner.RegisterOnDraw(Draw);
+            if (content is null)
+            {
+                content = Game1.game1.CreateContentManager(Game1.content.ServiceProvider, Game1.content.RootDirectory);
+                smallFont = content.Load<SpriteFont>("Fonts\\SmallFont");
+                K_textLineHeight = smallFont.MeasureString("AAA").Y;
+                SGameRunner.RegisterOnDraw(Draw);
+            }
+            if (activeLoggerLeases++ == 0)
+                StardewModdingAPI.Framework.Monitor.RegisterOnLogImpl(OnLogImpl);
+            ClearLogs();
         }
-        // ready
-        StardewModdingAPI.Framework.Monitor.RegisterOnLogImpl(OnLogImpl);
-        queueNumberShowLogger++;
-        ClearLogs();
+        return new LoggerLease(ReleaseLoggerToScreen);
     }
 
-    internal static void StopLoggerToScreen()
+    private static void ReleaseLoggerToScreen()
     {
         if (AndroidHostServices.Options?.ShowLoadingLogsOnScreen == false)
             return;
 
-        StardewModdingAPI.Framework.Monitor.UnregisterOnLogImpl(OnLogImpl);
-        queueNumberShowLogger--;
-        ClearLogs();
+        lock (LoggerSync)
+        {
+            if (activeLoggerLeases == 0)
+                return;
+            if (--activeLoggerLeases == 0)
+            {
+                StardewModdingAPI.Framework.Monitor.UnregisterOnLogImpl(OnLogImpl);
+                ClearLogs();
+            }
+        }
     }
 
     static void OnLogImpl(ConsoleLogLevel logLevel, string msg)
@@ -125,6 +136,20 @@ internal static class AndroidModLoaderManager
         }
 
         spriteBatch.End();
+    }
+
+    private sealed class LoggerLease : IDisposable
+    {
+        internal static readonly IDisposable Empty = new LoggerLease(null);
+        private Action? release;
+
+        internal LoggerLease(Action? release)
+        {
+            this.release = release;
+        }
+
+        public void Dispose()
+            => Interlocked.Exchange(ref this.release, null)?.Invoke();
     }
 
 }

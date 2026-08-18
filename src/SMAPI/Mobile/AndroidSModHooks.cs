@@ -23,8 +23,6 @@ internal static class AndroidSModHooks
     internal static void Init()
     {
         AndroidRuntimeDiagnostics.Start(Monitor);
-        MainThreadTasks.Reset();
-        AudioMainThreadTasks.Reset();
         AndroidGameLoopManager.RegisterOnGameUpdating(OnGameUpdating_TaskUpdate);
         AndroidSaveLoaderManager.Init();
         SGameRunner.RegisterOnDraw(OnAndroidDraw);
@@ -82,8 +80,8 @@ internal static class AndroidSModHooks
 
     internal static void CancelPendingMainThreadTasks(Exception reason)
     {
-        MainThreadTasks.Reset(reason);
-        AudioMainThreadTasks.Reset(reason);
+        MainThreadTasks.Close(reason);
+        AudioMainThreadTasks.Close(reason);
     }
 
     private static void OnAndroidDraw(GameTime time)

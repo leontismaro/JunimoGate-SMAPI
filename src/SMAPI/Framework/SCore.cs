@@ -340,7 +340,8 @@ internal class SCore : IDisposable
         {
             this.Monitor.Log($"SMAPI failed to initialize: {ex.GetLogSummary()}", LogLevel.Error);
 #if SMAPI_FOR_ANDROID
-            AndroidHostServices.Options?.ReportFailure(new SmapiFailure("smapi_initialization_failed", ex.Message, ex));
+            AndroidHostServices.ReportFailure(
+                new SmapiFailure("smapi_initialization_failed", ex.Message, ex));
 #endif
             this.LogManager.PressAnyKeyToExit();
             return;
@@ -373,7 +374,8 @@ internal class SCore : IDisposable
         catch (Exception ex)
         {
             Console.WriteLine("error try game.run(): " + ex);
-            AndroidHostServices.Options?.ReportFailure(new SmapiFailure("game_run_failed", ex.Message, ex));
+            AndroidHostServices.ReportFailure(
+                new SmapiFailure("game_run_failed", ex.Message, ex));
             throw;
         }
 #else
@@ -521,7 +523,6 @@ internal class SCore : IDisposable
 #if SMAPI_FOR_ANDROID
         Console.WriteLine("start loading mods in background thread");
         this.AndroidStartup.BeginModLoading();
-        AndroidModLoaderManager.StartLoggerToScreen();
         Task.Run(() =>
         {
 #endif
@@ -632,7 +633,6 @@ internal class SCore : IDisposable
 
 #if SMAPI_FOR_ANDROID
             this.AndroidStartup.CompleteModLoading();
-            AndroidHostServices.Options?.ReportModLoadingReady();
 #endif
         }
 
@@ -643,9 +643,8 @@ internal class SCore : IDisposable
             task =>
             {
                 Exception exception = task.Exception?.GetBaseException() ?? new InvalidOperationException("The Android mod loader failed without an exception.");
-                this.AndroidStartup.Fail(exception);
+                this.AndroidStartup.Fail(exception, "mod_loading_failed");
                 this.Monitor.Log($"Android mod loading failed before completion.\n{exception.GetLogSummary()}", LogLevel.Error);
-                AndroidHostServices.Options?.ReportFailure(new SmapiFailure("mod_loading_failed", exception.Message, exception));
             },
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted,
@@ -707,7 +706,6 @@ internal class SCore : IDisposable
         {
             this.AndroidStartup.Fail(ex);
             this.Monitor.Log($"Android startup failed.\n{ex.GetLogSummary()}", LogLevel.Error);
-            AndroidHostServices.Options?.ReportFailure(new SmapiFailure("android_startup_failed", ex.Message, ex));
         }
     }
 
@@ -837,14 +835,15 @@ internal class SCore : IDisposable
             this.Monitor.Log($"An error occurred in the overridden update loop: {ex.GetLogSummary()}", LogLevel.Error);
 #endif
 
-            // exit if irrecoverable
-            if (!this.UpdateCrashTimer.Decrement())
 #if SMAPI_FOR_ANDROID
+            if (observation.ShouldTerminate)
                 this.ExitGameImmediately(
                     "The game crashed when updating, and SMAPI was unable to recover the game.",
                     ex is BaseGameUpdateException ? "base_update_failed" : "game_update_failed",
                     failure);
 #else
+            // exit if irrecoverable
+            if (!this.UpdateCrashTimer.Decrement())
                 this.ExitGameImmediately("The game crashed when updating, and SMAPI was unable to recover the game.");
 #endif
         }
@@ -2910,7 +2909,7 @@ internal class SCore : IDisposable
 
         this.ExitState = ExitState.Crash;
 #if SMAPI_FOR_ANDROID
-        AndroidHostServices.Options?.ReportFailure(new SmapiFailure(failureCode, message, exception));
+        AndroidHostServices.ReportFailure(new SmapiFailure(failureCode, message, exception));
 #endif
         this.Game.Exit();
     }

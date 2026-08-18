@@ -11,6 +11,29 @@ namespace StardewModdingAPI.AndroidHost;
 
 public sealed record SmapiFailure(string Code, string Message, Exception? Exception = null);
 
+public enum SmapiSessionTransitionKind
+{
+    Running,
+    Failed,
+}
+
+public sealed record SmapiSessionTransition
+{
+    private SmapiSessionTransition(SmapiSessionTransitionKind kind, SmapiFailure? failure)
+    {
+        this.Kind = kind;
+        this.Failure = failure;
+    }
+
+    public SmapiSessionTransitionKind Kind { get; }
+    public SmapiFailure? Failure { get; }
+
+    public static SmapiSessionTransition Running { get; } = new(SmapiSessionTransitionKind.Running, null);
+
+    public static SmapiSessionTransition Failed(SmapiFailure failure)
+        => new(SmapiSessionTransitionKind.Failed, failure ?? throw new ArgumentNullException(nameof(failure)));
+}
+
 public interface IMainThreadDispatcher
 {
     bool IsMainThread { get; }
@@ -50,9 +73,8 @@ public sealed record SmapiRuntimeOptions
     public required ModAssemblyBindingPolicy AssemblyBindingPolicy { get; init; }
     public bool ShowLoadingLogsOnScreen { get; init; } = true;
     public required Action<View> AttachGameView { get; init; }
-    public required Action ReportModLoadingReady { get; init; }
     public required Action ReportGameViewReady { get; init; }
-    public required Action<SmapiFailure> ReportFailure { get; init; }
+    public required Action<SmapiSessionTransition> ReportState { get; init; }
 }
 
 public static class AndroidHostServices
@@ -96,6 +118,17 @@ public static class AndroidHostServices
     internal static void QueueBackPress() => Interlocked.Exchange(ref pendingBackPress, 1);
     internal static bool TryConsumeBackPress() => Interlocked.Exchange(ref pendingBackPress, 0) != 0;
     internal static void ClearPendingInput() => Interlocked.Exchange(ref pendingBackPress, 0);
+
+    internal static void ReportRunning()
+        => Options?.ReportState(SmapiSessionTransition.Running);
+
+    internal static void ReportFailure(SmapiFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        Mobile.AndroidSModHooks.CancelPendingMainThreadTasks(
+            failure.Exception ?? new InvalidOperationException(failure.Message));
+        Options?.ReportState(SmapiSessionTransition.Failed(failure));
+    }
 }
 
 public sealed class SmapiRuntime
@@ -138,7 +171,7 @@ public sealed class SmapiSession : IDisposable
         catch (Exception ex)
         {
             var failure = new SmapiFailure("session_start_failed", ex.Message, ex);
-            options.ReportFailure(failure);
+            AndroidHostServices.ReportFailure(failure);
             throw;
         }
     }

@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using Microsoft.Xna.Framework;
 
 namespace StardewModdingAPI.Mobile;
@@ -8,26 +10,23 @@ namespace StardewModdingAPI.Mobile;
 internal static class AndroidGameLoopManager
 {
     internal delegate bool OnGameUpdatingDelegate(GameTime gameTime);
-    static HashSet<OnGameUpdatingDelegate> listOnGameUpdating = new();
-    static Queue<OnGameUpdatingDelegate> queueOnGameUpdatingToAdd = new();
-    static Queue<OnGameUpdatingDelegate> queueOnGameUpdatingToRemove = new();
+    private static readonly Dictionary<long, OnGameUpdatingDelegate> ActiveCallbacks = new();
+    private static readonly Queue<CallbackRegistration> PendingAdditions = new();
+    private static readonly Queue<long> PendingRemovals = new();
+    private static long nextRegistrationId;
 
     /// <summary>
     /// Register On Main Thread Only!!
     /// </summary>
     /// <param name="onGameUpdate"></param>
-    internal static void RegisterOnGameUpdating(OnGameUpdatingDelegate onGameUpdate)
+    internal static IDisposable RegisterOnGameUpdating(OnGameUpdatingDelegate onGameUpdate)
     {
-        queueOnGameUpdatingToAdd.Enqueue(onGameUpdate);
-    }
-
-    /// <summary>
-    /// Unregister On Main Thread Only!!
-    /// </summary>
-    /// <param name="onGameUpdate"></param>
-    internal static void UnregisterOnGameUpdating(OnGameUpdatingDelegate onGameUpdate)
-    {
-        queueOnGameUpdatingToRemove.Enqueue(onGameUpdate);
+        ArgumentNullException.ThrowIfNull(onGameUpdate);
+        var registration = new CallbackRegistration(
+            Interlocked.Increment(ref nextRegistrationId),
+            onGameUpdate);
+        PendingAdditions.Enqueue(registration);
+        return registration;
     }
 
     public static bool IsSkipOriginalGameUpdating { get; private set; } = false;
@@ -36,31 +35,45 @@ internal static class AndroidGameLoopManager
         //reset
         IsSkipOriginalGameUpdating = false;
 
-        if (queueOnGameUpdatingToAdd.Count > 0)
+        if (PendingAdditions.Count > 0)
         {
-            while (queueOnGameUpdatingToAdd.TryDequeue(out OnGameUpdatingDelegate? item))
-            {
-                if (item is not null)
-                    listOnGameUpdating.Add(item);
-            }
+            while (PendingAdditions.TryDequeue(out CallbackRegistration? registration))
+                ActiveCallbacks[registration.Id] = registration.Callback;
         }
 
-        if (queueOnGameUpdatingToRemove.Count > 0)
+        if (PendingRemovals.Count > 0)
         {
-            while (queueOnGameUpdatingToRemove.TryDequeue(out OnGameUpdatingDelegate? item))
-            {
-                if (item is not null)
-                    listOnGameUpdating.Remove(item);
-            }
+            while (PendingRemovals.TryDequeue(out long registrationId))
+                ActiveCallbacks.Remove(registrationId);
         }
 
         //Console.WriteLine("Android Looper OnGameUpdating...");
-        foreach (var callback in listOnGameUpdating)
+        foreach (var callback in ActiveCallbacks.Values)
         {
             if (callback(gameTime))
             {
                 IsSkipOriginalGameUpdating = true;
             }
+        }
+    }
+
+    private sealed class CallbackRegistration : IDisposable
+    {
+        private int disposed;
+
+        internal CallbackRegistration(long id, OnGameUpdatingDelegate callback)
+        {
+            this.Id = id;
+            this.Callback = callback;
+        }
+
+        internal long Id { get; }
+        internal OnGameUpdatingDelegate Callback { get; }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref this.disposed, 1) == 0)
+                PendingRemovals.Enqueue(this.Id);
         }
     }
 

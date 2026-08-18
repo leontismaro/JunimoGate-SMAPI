@@ -11,7 +11,9 @@ internal sealed class AndroidMainThreadTaskQueue
 {
     private readonly ConcurrentQueue<WorkItem> pending = new();
     private readonly Func<string?, IDisposable?>? trackWork;
+    private readonly object lifecycleSync = new();
     private int gameThreadId;
+    private Exception? closeReason;
 
     internal bool HasPending => !this.pending.IsEmpty;
 
@@ -23,6 +25,11 @@ internal sealed class AndroidMainThreadTaskQueue
     public Task Enqueue(Action action, string? name = null)
     {
         ArgumentNullException.ThrowIfNull(action);
+        lock (this.lifecycleSync)
+        {
+            if (this.closeReason is { } reason)
+                return Task.FromException(reason);
+        }
         if (Volatile.Read(ref this.gameThreadId) == Environment.CurrentManagedThreadId)
         {
             IDisposable? tracking = this.TryBeginTracking(name);
@@ -49,7 +56,13 @@ internal sealed class AndroidMainThreadTaskQueue
     {
         ArgumentNullException.ThrowIfNull(action);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        this.pending.Enqueue(new WorkItem(action, name, completion));
+        lock (this.lifecycleSync)
+        {
+            if (this.closeReason is { } reason)
+                completion.TrySetException(reason);
+            else
+                this.pending.Enqueue(new WorkItem(action, name, completion));
+        }
         return completion.Task;
     }
 
@@ -97,12 +110,14 @@ internal sealed class AndroidMainThreadTaskQueue
         return new PumpResult(executed, Stopwatch.GetElapsedTime(pumpStartedAt), !this.pending.IsEmpty);
     }
 
-    public void Reset(Exception? reason = null)
+    public void Close(Exception? reason = null)
     {
-        reason ??= new OperationCanceledException("The Android main-thread work queue was reset.");
-        while (this.pending.TryDequeue(out WorkItem? work))
-            work.Completion.TrySetException(reason);
-        Volatile.Write(ref this.gameThreadId, 0);
+        lock (this.lifecycleSync)
+        {
+            this.closeReason ??= reason ?? new OperationCanceledException("The Android main-thread work queue was closed.");
+            while (this.pending.TryDequeue(out WorkItem? work))
+                work.Completion.TrySetException(this.closeReason);
+        }
     }
 
     private IDisposable? TryBeginTracking(string? name)

@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using StardewModdingAPI.AndroidHost;
 using StardewValley;
 
 namespace StardewModdingAPI.Mobile;
@@ -8,12 +9,15 @@ namespace StardewModdingAPI.Mobile;
 internal sealed class AndroidStartupCoordinator
 {
     private int phase = (int)StartupPhase.NotStarted;
+    private IDisposable? loadingLoggerLease;
 
     public StartupPhase Phase => (StartupPhase)Volatile.Read(ref this.phase);
 
     public void BeginModLoading()
     {
         AndroidContentLoaderManager.Reset();
+        this.loadingLoggerLease?.Dispose();
+        this.loadingLoggerLease = AndroidModLoaderManager.AcquireLoggerToScreen();
         Volatile.Write(ref this.phase, (int)StartupPhase.ModLoading);
     }
 
@@ -28,11 +32,25 @@ internal sealed class AndroidStartupCoordinator
         }
     }
 
-    public void Fail(Exception exception)
+    public bool Fail(Exception exception, string failureCode = "android_startup_failed")
     {
         ArgumentNullException.ThrowIfNull(exception);
-        Volatile.Write(ref this.phase, (int)StartupPhase.Failed);
-        AndroidSModHooks.CancelPendingMainThreadTasks(exception);
+        while (true)
+        {
+            StartupPhase current = this.Phase;
+            if (current is StartupPhase.Failed or StartupPhase.Running)
+                return false;
+            if (Interlocked.CompareExchange(
+                    ref this.phase,
+                    (int)StartupPhase.Failed,
+                    (int)current) == (int)current)
+            {
+                Interlocked.Exchange(ref this.loadingLoggerLease, null)?.Dispose();
+                AndroidHostServices.ReportFailure(
+                    new SmapiFailure(failureCode, exception.Message, exception));
+                return true;
+            }
+        }
     }
 
     /// <returns>Whether normal SMAPI game updates can begin.</returns>
@@ -53,8 +71,13 @@ internal sealed class AndroidStartupCoordinator
             case StartupPhase.WaitingForMenu:
                 if (Game1.activeClickableMenu is null)
                     return false;
-                AndroidModLoaderManager.StopLoggerToScreen();
-                Volatile.Write(ref this.phase, (int)StartupPhase.Running);
+                Interlocked.Exchange(ref this.loadingLoggerLease, null)?.Dispose();
+                if (Interlocked.CompareExchange(
+                        ref this.phase,
+                        (int)StartupPhase.Running,
+                        (int)StartupPhase.WaitingForMenu) != (int)StartupPhase.WaitingForMenu)
+                    return false;
+                AndroidHostServices.ReportRunning();
                 return true;
 
             case StartupPhase.Running:

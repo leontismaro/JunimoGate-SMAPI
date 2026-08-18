@@ -35,9 +35,8 @@ internal sealed class AndroidDrawGatedTaskQueue
         this.isAllowed = true;
     }
 
-    public void Reset(Exception? reason = null)
+    public void Close(Exception? reason = null)
     {
-        this.queue.Reset(reason);
-        this.isAllowed = true;
+        this.queue.Close(reason);
     }
 }

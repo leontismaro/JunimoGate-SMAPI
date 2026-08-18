@@ -12,14 +12,10 @@ internal static class AndroidSaveLoaderManager
     private static readonly AndroidWorldEntryGate WorldEntryGate = new();
     public static bool IsSaveParsed => Context.LoadStage is LoadStage.SaveParsed;
     static Monitor monitor = null!;
-    private static bool isLoaderActive;
-    private static bool isWaitingForAudio;
 
     internal static void Init()
     {
         WorldEntryGate.Reset();
-        isLoaderActive = false;
-        isWaitingForAudio = false;
         AndroidGameLoopManager.RegisterOnGameUpdating(OnGameUpdating);
     }
 
@@ -28,13 +24,12 @@ internal static class AndroidSaveLoaderManager
 
     internal static void StartLoader()
     {
-        if (isLoaderActive)
+        if (!WorldEntryGate.BeginLoading())
             return;
 
         monitor = SCore.Instance.SMAPIMonitor as Monitor
             ?? throw new InvalidOperationException("The Android save loader requires the SMAPI monitor.");
         monitor.Log("Game loader with AndroidSaveLoader currentLoader.MoveNext()", Monitor.ContextLogLevel);
-        isLoaderActive = true;
     }
 
     private static bool OnGameUpdating(GameTime gameTime)
@@ -43,28 +38,28 @@ internal static class AndroidSaveLoaderManager
             WorldEntryGate.Request();
 
         bool isAudioReady = CustomAudioCueModificationManager.Instance is not { IsReady: false };
-        bool shouldBlock = WorldEntryGate.ShouldBlock(isAudioReady);
-        if (shouldBlock)
+        AndroidWorldEntryGate.WorldEntryObservation observation = WorldEntryGate.ObserveDependency(isAudioReady);
+        if (observation.Transition == AndroidWorldEntryGate.WorldEntryTransition.StartedWaiting)
         {
-            if (!isWaitingForAudio)
-            {
-                isWaitingForAudio = true;
-                SCore.Instance.SMAPIMonitor.Log(
-                    "Game world entry waiting for Android audio cues.",
-                    Monitor.ContextLogLevel);
-            }
-            return true;
+            SCore.Instance.SMAPIMonitor.Log(
+                "Game world entry waiting for Android audio cues.",
+                Monitor.ContextLogLevel);
         }
-
-        if (isWaitingForAudio)
+        else if (observation.Transition == AndroidWorldEntryGate.WorldEntryTransition.DependencyReady)
         {
-            isWaitingForAudio = false;
             SCore.Instance.SMAPIMonitor.Log(
                 "Android audio cues ready; resuming game world entry.",
                 Monitor.ContextLogLevel);
         }
+        if (observation.ShouldBlock)
+            return true;
 
-        return isLoaderActive && UpdateSaveLoader(gameTime);
+        if (!observation.ShouldAdvanceLoader)
+            return false;
+        bool isStillLoading = UpdateSaveLoader(gameTime);
+        if (!isStillLoading)
+            WorldEntryGate.CompleteLoading();
+        return isStillLoading;
     }
 
     //run Save.currentLoader.NextMove() within main game updating
@@ -101,7 +96,6 @@ internal static class AndroidSaveLoaderManager
             //save game loaded
             //break; // done
             monitor.Log("Game loader done.", Monitor.ContextLogLevel);
-            isLoaderActive = false;
             return false;
         }
         else

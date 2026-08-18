@@ -20,12 +20,6 @@ namespace StardewModdingAPI.Mobile.Audio;
 [HarmonyPatch]
 internal class CustomAudioCueModificationManager : AudioCueModificationManager
 {
-    public enum LoadStage
-    {
-        None,
-        Loading,
-        Loaded,
-    }
     public static CustomAudioCueModificationManager Instance { get; private set; }
     IMonitor monitor;
     public CustomAudioCueModificationManager()
@@ -42,12 +36,13 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         return false;
     }
 
-    public LoadStage loadStage = LoadStage.None;
-    internal bool IsReady => this.loadStage != LoadStage.Loading || Volatile.Read(ref this.pendingCueCount) == 0;
+    internal bool IsReady => Volatile.Read(ref this.preparation)?.Snapshot.IsReady != false;
     private readonly Dictionary<string, CueIdentity> appliedCueIdentities = new(StringComparer.Ordinal);
-    private int loadGeneration;
-    private int pendingCueCount;
-    private bool loadingCallbackActive;
+    private int nextGeneration;
+    private AndroidAudioPreparationState? preparation;
+    private readonly SemaphoreSlim generationWorkerGate = new(1, 1);
+    private IDisposable? loadingLoggerLease;
+    private IDisposable? updateRegistration;
 
     void MyStartUp()
     {
@@ -58,23 +53,18 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
 
     public override void ApplyAllCueModifications()
     {
+        AndroidAudioPreparationState? generation = null;
         try
         {
-            int generation = Interlocked.Increment(ref this.loadGeneration);
-            Volatile.Write(ref this.pendingCueCount, this.cueModificationData.Count);
+            generation = new AndroidAudioPreparationState(
+                Interlocked.Increment(ref this.nextGeneration),
+                this.cueModificationData.Count);
+            Interlocked.Exchange(ref this.preparation, generation)?.Supersede();
             if (this.cueModificationData.Count == 0)
-            {
-                this.loadStage = LoadStage.Loaded;
                 return;
-            }
 
-            this.loadStage = LoadStage.Loading;
-            if (!this.loadingCallbackActive)
-            {
-                this.loadingCallbackActive = true;
-                AndroidModLoaderManager.StartLoggerToScreen();
-                AndroidGameLoopManager.RegisterOnGameUpdating(this.OnGameUpdating);
-            }
+            this.loadingLoggerLease ??= AndroidModLoaderManager.AcquireLoggerToScreen();
+            this.updateRegistration ??= AndroidGameLoopManager.RegisterOnGameUpdating(this.OnGameUpdating);
 
             var plans = new List<CueLoadPlan>();
             foreach ((string key, var modification) in this.cueModificationData)
@@ -101,7 +91,7 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
                         filesIdentity);
                     if (this.CanReuseCue(key, modification.Id, identity))
                     {
-                        this.MarkCueCompleted(key, generation);
+                        generation.CompleteCue(hadError: false);
                         continue;
                     }
 
@@ -114,7 +104,7 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
                 catch (Exception exception)
                 {
                     this.monitor.Log($"Failed planning Android audio cue '{key}': {exception.GetLogSummary()}", LogLevel.Error);
-                    this.MarkCueCompleted(key, generation);
+                    generation.CompleteCue(hadError: true);
                 }
             }
 
@@ -129,23 +119,23 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
             }
             catch
             {
-                this.CompleteGeneration(generation);
+                generation.CompleteRemainingWithErrors();
                 throw;
             }
         }
         catch (Exception ex)
         {
+            generation?.CompleteRemainingWithErrors();
             this.monitor.Log(ex.GetLogSummary(), LogLevel.Error);
         }
     }
     bool OnGameUpdating(GameTime time)
     {
-        if (Volatile.Read(ref this.pendingCueCount) == 0)
+        AndroidAudioPreparationState? current = Volatile.Read(ref this.preparation);
+        if (current is null || current.Snapshot.Status != AndroidAudioPreparationStatus.Preparing)
         {
-            this.loadStage = LoadStage.Loaded;
-            this.loadingCallbackActive = false;
-            AndroidGameLoopManager.UnregisterOnGameUpdating(this.OnGameUpdating);
-            AndroidModLoaderManager.StopLoggerToScreen();
+            Interlocked.Exchange(ref this.updateRegistration, null)?.Dispose();
+            Interlocked.Exchange(ref this.loadingLoggerLease, null)?.Dispose();
 
             return false;
         }
@@ -162,86 +152,146 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
         _ = this.TryApplyCueModification(key, out _);
     }
 
-    private void LoadCueModificationsInBackground(CueLoadPlan[] plans, int generation)
+    private void LoadCueModificationsInBackground(
+        CueLoadPlan[] plans,
+        AndroidAudioPreparationState generation)
     {
+        bool gateEntered = false;
         try
         {
+            generation.CancellationToken.ThrowIfCancellationRequested();
+            this.generationWorkerGate.Wait(generation.CancellationToken);
+            gateEntered = true;
+
+            if (!this.IsCurrentGeneration(generation))
+                return;
+
             foreach (CueLoadPlan plan in plans)
             {
-                if (generation != Volatile.Read(ref this.loadGeneration))
+                if (!this.IsCurrentGeneration(generation))
                     return;
 
                 var effects = new List<SoundEffect>();
-                bool applied = false;
+                bool ownershipTransferred = false;
+                bool hadError = false;
                 try
                 {
                     foreach (string filePath in plan.FilePaths)
                     {
+                        if (!this.IsCurrentGeneration(generation))
+                            return;
+
                         try
                         {
                             if (Path.GetExtension(filePath).Equals(".ogg", StringComparison.OrdinalIgnoreCase)
                                 && !plan.StreamedVorbis)
                             {
                                 SoundEffectVorbis.DecodedSound decoded = SoundEffectVorbis.DecodeFromFilePath(filePath);
+                                if (!this.IsCurrentGeneration(generation))
+                                    return;
+
                                 SoundEffect? published = null;
                                 AndroidSModHooks.AddAudioTaskRunOnMainThreadDeferred(
-                                    () => published = SoundEffectVorbis.CreateFromDecoded(decoded),
+                                    () =>
+                                    {
+                                        if (this.IsCurrentGeneration(generation))
+                                            published = SoundEffectVorbis.CreateFromDecoded(decoded);
+                                    },
                                     $"Publish decoded audio: {Path.GetFileName(filePath)}")
                                     .GetAwaiter().GetResult();
+
+                                if (!this.IsCurrentGeneration(generation))
+                                {
+                                    published?.Dispose();
+                                    return;
+                                }
                                 effects.Add(published ?? throw new InvalidOperationException("Decoded audio was not published."));
                             }
                             else
                             {
                                 SoundEffect? loaded = null;
                                 AndroidSModHooks.AddAudioTaskRunOnMainThreadDeferred(
-                                    () => loaded = this.LoadSoundSynchronously(filePath, plan.StreamedVorbis),
+                                    () =>
+                                    {
+                                        if (this.IsCurrentGeneration(generation))
+                                            loaded = this.LoadSoundSynchronously(filePath, plan.StreamedVorbis);
+                                    },
                                     $"Load audio: {Path.GetFileName(filePath)}")
                                     .GetAwaiter().GetResult();
+
+                                if (!this.IsCurrentGeneration(generation))
+                                {
+                                    loaded?.Dispose();
+                                    return;
+                                }
                                 effects.Add(loaded ?? throw new InvalidOperationException("Audio was not loaded."));
                             }
                         }
+                        catch (OperationCanceledException) when (generation.CancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
                         catch (Exception exception)
                         {
+                            hadError = true;
                             this.LogSoundLoadError(filePath, exception);
                         }
                     }
 
+                    if (!this.IsCurrentGeneration(generation))
+                        return;
+
                     AndroidSModHooks.AddAudioTaskRunOnMainThreadDeferred(
                         () =>
                         {
-                            if (generation != Volatile.Read(ref this.loadGeneration))
-                            {
-                                foreach (SoundEffect effect in effects)
-                                    effect.Dispose();
+                            if (!this.IsCurrentGeneration(generation))
                                 return;
-                            }
-                            applied = this.TryApplyPreparedCueModification(plan.Key, effects.ToArray());
+
+                            bool applied = this.TryApplyPreparedCueModification(plan.Key, effects.ToArray());
+                            hadError |= !applied;
                             if (applied)
-                                this.appliedCueIdentities[plan.Key] = plan.Identity;
-                            else
                             {
-                                foreach (SoundEffect effect in effects)
-                                    effect.Dispose();
+                                ownershipTransferred = true;
+                                this.appliedCueIdentities[plan.Key] = plan.Identity;
                             }
                         },
                         $"Apply audio cue: {plan.Key}")
                         .GetAwaiter().GetResult();
                 }
+                catch (OperationCanceledException) when (generation.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 catch (Exception exception)
                 {
+                    hadError = true;
                     this.monitor.Log($"Failed loading Android audio cue '{plan.Key}': {exception.GetLogSummary()}", LogLevel.Error);
                 }
                 finally
                 {
-                    this.MarkCueCompleted(plan.Key, generation);
+                    if (!ownershipTransferred)
+                    {
+                        foreach (SoundEffect effect in effects)
+                            effect.Dispose();
+                    }
+                    generation.CompleteCue(hadError);
                 }
             }
         }
+        catch (OperationCanceledException) when (generation.CancellationToken.IsCancellationRequested)
+        {
+        }
         finally
         {
-            this.CompleteGeneration(generation);
+            if (gateEntered)
+                this.generationWorkerGate.Release();
+            generation.CompleteRemainingWithErrors();
         }
     }
+
+    private bool IsCurrentGeneration(AndroidAudioPreparationState generation)
+        => ReferenceEquals(generation, Volatile.Read(ref this.preparation))
+            && !generation.CancellationToken.IsCancellationRequested;
 
     private SoundEffect LoadSoundSynchronously(string filePath, bool streamedVorbis)
     {
@@ -397,21 +447,6 @@ internal class CustomAudioCueModificationManager : AudioCueModificationManager
 
     private void LogSoundLoadError(string filePath, Exception exception)
         => this.monitor.Log($"Error loading sound '{filePath}': {exception.GetLogSummary()}", LogLevel.Error);
-
-    private void MarkCueCompleted(string key, int generation)
-    {
-        if (generation != Volatile.Read(ref this.loadGeneration))
-            return;
-
-        if (Interlocked.Decrement(ref this.pendingCueCount) < 0)
-            Volatile.Write(ref this.pendingCueCount, 0);
-    }
-
-    private void CompleteGeneration(int generation)
-    {
-        if (generation == Volatile.Read(ref this.loadGeneration))
-            Volatile.Write(ref this.pendingCueCount, 0);
-    }
 
     private sealed record CueLoadPlan(
         string Key,
