@@ -165,6 +165,7 @@ public sealed class SmapiSession : IDisposable
     public void Dispose()
     {
         disposed = true;
+        Mobile.AndroidRuntimeDiagnostics.Stop();
         AndroidHostServices.ClearPendingInput();
         gameView = null;
         game = null;

@@ -281,7 +281,12 @@ internal class SGame : Game1
         Game1.input = this.InitialInput;
         Game1.multiplayer = this.InitialMultiplayer;
         if (this.IsMainInstance)
+        {
             TitleMenu.OnCreatedNewCharacter += () => this.OnLoadStageChanged(LoadStage.CreatedBasicInfo); // event is static and shared between screens
+#if SMAPI_FOR_ANDROID
+            TitleMenu.OnCreatedNewCharacter += AndroidSaveLoaderManager.OnCreatedNewCharacter;
+#endif
+        }
 
         // The Initial* fields should no longer be used after this point, since mods may further override them after initialization.
         this.InitialInput = null;
